@@ -7,7 +7,7 @@ import { Menu, X, ArrowRight } from "lucide-react";
 import IskraLogo from "@/components/IskraLogo";
 
 // Pages with dark hero backgrounds (white text by default)
-const darkPages = ["/"];
+const darkPages = ["/", "/dashboard"];
 
 export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
@@ -84,7 +84,7 @@ export default function Navbar() {
                 href="/dashboard"
                 className="border border-accent text-accent hover:bg-accent hover:text-white px-6 py-2 text-sm tracking-widest font-medium transition-all duration-300"
               >
-                TRY PRODUCT
+                TRY ONE CLICK
               </Link>
             </div>
 
