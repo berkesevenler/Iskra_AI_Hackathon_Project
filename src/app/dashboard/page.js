@@ -30,7 +30,17 @@ import {
   FileText,
   Eye,
   Activity,
+  Globe,
+  GitBranch,
+  Timer,
 } from "lucide-react";
+import dynamic from "next/dynamic";
+
+// Dynamically import heavy viz components (no SSR — they use browser APIs)
+const WorldMap = dynamic(() => import("@/components/viz/WorldMap"), { ssr: false });
+const DependencyGraph = dynamic(() => import("@/components/viz/DependencyGraph"), { ssr: false });
+const MessageFlow = dynamic(() => import("@/components/viz/MessageFlow"), { ssr: false });
+const CoordinationTimeline = dynamic(() => import("@/components/viz/CoordinationTimeline"), { ssr: false });
 
 // ═══════════════════════════════════════════
 // Agent Configuration
@@ -56,10 +66,10 @@ const AGENT_TEXT_COLOR = Object.fromEntries(AGENTS.map(a => [a.id, COLOR_MAP[a.c
 AGENT_TEXT_COLOR["system"] = "text-gray-500";
 
 const EXAMPLES = [
-  "Buy all the parts required to assemble a Ferrari in one click",
-  "Order all components needed to build a high-end gaming PC",
-  "Source all materials for a custom electric bicycle",
-  "Procure everything needed to build a smart home system",
+  "Procure all parts to assemble a Ferrari — cheapest options, delivery within 30 days",
+  "Order 500 industrial servo motors for our Berlin factory, budget under $200K, 14-day deadline",
+  "Source all materials for 1,000 custom electric bicycles — prioritize EU suppliers with ISO 9001",
+  "Build a complete smart home system for a 200-unit residential project, optimize for total cost",
 ];
 
 const BACKEND_URL = typeof window !== "undefined"
@@ -324,7 +334,7 @@ export default function DashboardPage() {
               report={active.report}
             />
           ) : (
-            <VisualizationTab />
+            <VisualizationTab plan={active.plan} report={active.report} logs={active.logs} />
           )}
         </div>
       </div>
@@ -380,7 +390,7 @@ function AgentDashboard({ active, updateProject, handleRun, hasResults, logRef, 
           <div className="flex flex-wrap gap-2 mt-3">
             {EXAMPLES.map(ex => (
               <button key={ex} onClick={() => updateProject(active.id, { intent: ex })}
-                className="text-white/20 hover:text-white/40 hover:border-white/15 text-[11px] border border-white/5 px-3 py-1.5 transition-all">
+                className="text-white/35 hover:text-white/60 hover:border-white/20 text-[11px] border border-white/10 px-3 py-1.5 transition-all">
                 {ex}
               </button>
             ))}
@@ -420,7 +430,7 @@ function AgentDashboard({ active, updateProject, handleRun, hasResults, logRef, 
                       {agent.name.toUpperCase()}
                     </span>
                   </div>
-                  <p className="text-white/15 text-[9px] tracking-wider">{agent.role}</p>
+                  <p className="text-white/25 text-[9px] tracking-wider">{agent.role}</p>
                   <div className="flex items-center gap-1.5 mt-1.5">
                     {st === "active" && (
                       <span className="relative flex h-1.5 w-1.5">
@@ -452,14 +462,14 @@ function AgentDashboard({ active, updateProject, handleRun, hasResults, logRef, 
               {active.logs.map((log, i) => (
                 <motion.div key={i} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.15 }}
                   className="flex gap-2 py-1 border-b border-white/[0.02] last:border-0">
-                  <span className="text-white/12 w-14 flex-shrink-0 text-right">
+                  <span className="text-white/20 w-14 flex-shrink-0 text-right">
                     {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
                   </span>
                   <span className={`w-20 flex-shrink-0 font-medium truncate ${AGENT_TEXT_COLOR[log.agent_id] || "text-gray-400"}`}>
                     {log.agent_name || log.agent_id}
                   </span>
-                  <span className="text-white/50 flex-1">
-                    <span className="text-white/20 mr-1.5">{log.event?.replace(/_/g, " ")}</span>
+                  <span className="text-white/60 flex-1">
+                    <span className="text-white/35 mr-1.5">{log.event?.replace(/_/g, " ")}</span>
                     {log.details}
                   </span>
                 </motion.div>
@@ -484,8 +494,8 @@ function AgentDashboard({ active, updateProject, handleRun, hasResults, logRef, 
           <div className="w-14 h-14 mx-auto mb-5 border border-white/8 flex items-center justify-center">
             <Zap className="h-5 w-5 text-accent/40" />
           </div>
-          <p className="text-white/15 text-sm tracking-wide mb-1">Enter a procurement request above</p>
-          <p className="text-white/8 text-xs tracking-wider">5 AI agents · 90 global partners · Real-time coordination</p>
+          <p className="text-white/25 text-sm tracking-wide mb-1">Enter a procurement request above</p>
+          <p className="text-white/15 text-xs tracking-wider">5 AI agents · 90 global partners · Real-time coordination</p>
         </motion.div>
       )}
     </div>
@@ -494,25 +504,64 @@ function AgentDashboard({ active, updateProject, handleRun, hasResults, logRef, 
 
 
 // ═══════════════════════════════════════════
-// Visualization Tab (Placeholder)
+// Visualization Tab
 // ═══════════════════════════════════════════
 
-function VisualizationTab() {
+const VIZ_TABS = [
+  { key: "map",        label: "World Map",          icon: Globe },
+  { key: "dependency", label: "Dependency Graph",    icon: GitBranch },
+  { key: "messages",   label: "Message Flow",        icon: MessageSquare },
+  { key: "timeline",   label: "Coordination Timeline", icon: Timer },
+];
+
+function VisualizationTab({ plan, report, logs }) {
+  const [vizTab, setVizTab] = useState("map");
+
   return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
-      <div className="w-16 h-16 mx-auto mb-6 border border-white/[0.06] flex items-center justify-center">
-        <Eye className="h-6 w-6 text-white/10" />
+    <div className="flex flex-col h-[calc(100vh-10rem)]">
+      {/* Viz sub-tabs */}
+      <div className="flex items-center border-b border-white/[0.04] bg-dark-mid/30 px-4">
+        {VIZ_TABS.map((tab) => {
+          const Icon = tab.icon;
+          const isActive = vizTab === tab.key;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setVizTab(tab.key)}
+              className={`flex items-center gap-2 px-4 py-3 text-[10px] tracking-[0.12em] uppercase transition-all border-b-2 ${
+                isActive
+                  ? "border-accent text-white/70"
+                  : "border-transparent text-white/20 hover:text-white/35"
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{tab.label}</span>
+            </button>
+          );
+        })}
+
+        {/* Status indicator */}
+        <div className="ml-auto flex items-center gap-2 pr-2">
+          {plan ? (
+            <>
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-emerald-400/50 text-[9px] tracking-wider">LIVE DATA</span>
+            </>
+          ) : (
+            <>
+              <div className="w-1.5 h-1.5 rounded-full bg-white/10" />
+              <span className="text-white/10 text-[9px] tracking-wider">NO DATA</span>
+            </>
+          )}
+        </div>
       </div>
-      <h3 className="text-white/20 text-lg font-medium tracking-wide mb-2">
-        Visualization
-      </h3>
-      <p className="text-white/10 text-sm max-w-md leading-relaxed">
-        Agent network graphs, supply chain maps, and real-time coordination
-        visualizations will appear here.
-      </p>
-      <div className="flex items-center gap-2 mt-8 text-white/8 text-[10px] tracking-wider">
-        <div className="w-1.5 h-1.5 rounded-full bg-accent/30" />
-        COMING SOON
+
+      {/* Viz content */}
+      <div className="flex-1 overflow-hidden">
+        {vizTab === "map" && <WorldMap plan={plan} />}
+        {vizTab === "dependency" && <DependencyGraph plan={plan} report={report} />}
+        {vizTab === "messages" && <MessageFlow plan={plan} report={report} />}
+        {vizTab === "timeline" && <CoordinationTimeline plan={plan} report={report} logs={logs} />}
       </div>
     </div>
   );
@@ -567,8 +616,8 @@ function ExecutionPlan({ plan, separateReport }) {
         return (
           <div className="bg-dark-mid border border-white/5 p-5 mb-5">
             <div className="flex items-center justify-between mb-4">
-              <p className="text-white/25 text-[10px] tracking-[0.15em] uppercase">Project Timeline</p>
-              <p className="text-white/40 text-xs font-medium">{totalDays} days total</p>
+              <p className="text-white/40 text-[10px] tracking-[0.15em] uppercase">Project Timeline</p>
+              <p className="text-white/60 text-xs font-medium">{totalDays} days total</p>
             </div>
 
             {/* Timeline bar */}
@@ -593,10 +642,10 @@ function ExecutionPlan({ plan, separateReport }) {
                   <div key={i} className={`border-l-2 ${ph.border} pl-3 py-1`}>
                     <div className="flex items-center gap-1.5 mb-0.5">
                       <div className={`w-1.5 h-1.5 rounded-full ${ph.color}`} />
-                      <span className="text-white/50 text-[10px] font-medium tracking-wide">{ph.label}</span>
+                      <span className="text-white/60 text-[10px] font-medium tracking-wide">{ph.label}</span>
                     </div>
                     <p className={`${ph.textColor} text-sm font-semibold`}>{ph.days} days</p>
-                    <p className="text-white/20 text-[10px]">Day {startDay + 1} → {cumulativeDays}</p>
+                    <p className="text-white/35 text-[10px]">Day {startDay + 1} → {cumulativeDays}</p>
                   </div>
                 );
               })}
@@ -615,7 +664,7 @@ function ExecutionPlan({ plan, separateReport }) {
         >
           {plan.suppliers?.selected_details && (
             <div className="mb-4">
-              <p className="text-white/20 text-[10px] tracking-wider uppercase mb-2">Selected Suppliers</p>
+              <p className="text-white/35 text-[10px] tracking-wider uppercase mb-2">Selected Suppliers</p>
               <div className="flex flex-wrap gap-2">
                 {plan.suppliers.selected_details.map((s, i) => (
                   <span key={i} className="inline-flex items-center gap-1.5 text-[10px] text-cyan-400/70 border border-cyan-400/15 px-2 py-1">
@@ -629,15 +678,15 @@ function ExecutionPlan({ plan, separateReport }) {
             {plan.suppliers?.quotes?.map((q, i) => (
               <div key={i} className="flex justify-between items-start py-2 border-b border-white/[0.03] last:border-0">
                 <div className="flex-1 mr-3">
-                  <p className="text-white/60 text-xs font-medium">{q.component_name || q.name}</p>
-                  <p className="text-white/20 text-[10px] mt-0.5 line-clamp-1">
-                    {q.assigned_supplier && <span className="text-cyan-400/40 mr-1">via {q.assigned_supplier}</span>}
+                  <p className="text-white/75 text-xs font-medium">{q.component_name || q.name}</p>
+                  <p className="text-white/30 text-[10px] mt-0.5 line-clamp-1">
+                    {q.assigned_supplier && <span className="text-cyan-400/50 mr-1">via {q.assigned_supplier}</span>}
                     {q.description || q.specifications || "—"}
                   </p>
                 </div>
                 <div className="text-right flex-shrink-0">
                   <p className="text-cyan-400/70 text-xs font-medium">${Number(q.unit_cost_usd || 0).toLocaleString()}</p>
-                  <p className="text-white/15 text-[10px]">{q.lead_time_days || "?"}d lead</p>
+                  <p className="text-white/30 text-[10px]">{q.lead_time_days || "?"}d lead</p>
                 </div>
               </div>
             ))}
@@ -652,8 +701,8 @@ function ExecutionPlan({ plan, separateReport }) {
         >
           {plan.manufacturer?.selected_details && (
             <div className="mb-3">
-              <p className="text-white/20 text-[10px] tracking-wider uppercase mb-1.5">Selected Facility</p>
-              <p className="text-white/50 text-xs">
+              <p className="text-white/35 text-[10px] tracking-wider uppercase mb-1.5">Selected Facility</p>
+              <p className="text-white/60 text-xs">
                 <span className="text-emerald-400/60 font-medium">{plan.manufacturer.selected_details.name}</span>
                 {plan.manufacturer.selected_details.location && ` — ${plan.manufacturer.selected_details.location}`}
                 {plan.manufacturer.selected_details.facility_size && ` · ${plan.manufacturer.selected_details.facility_size}`}
@@ -662,14 +711,14 @@ function ExecutionPlan({ plan, separateReport }) {
             </div>
           )}
           {plan.manufacturer?.selection_rationale && (
-            <p className="text-white/25 text-[10px] italic mb-3">&quot;{plan.manufacturer.selection_rationale}&quot;</p>
+            <p className="text-white/40 text-[10px] italic mb-3">&quot;{plan.manufacturer.selection_rationale}&quot;</p>
           )}
           {plan.manufacturer?.assembly_plan?.steps?.map((step, i) => (
             <div key={i} className="flex gap-2.5 py-1.5 border-b border-white/[0.03] last:border-0">
-              <span className="text-emerald-400/30 text-xs font-mono w-5 flex-shrink-0">{step.step || i + 1}.</span>
+              <span className="text-emerald-400/40 text-xs font-mono w-5 flex-shrink-0">{step.step || i + 1}.</span>
               <div>
-                <p className="text-white/55 text-xs">{step.description}</p>
-                <p className="text-white/15 text-[10px]">{step.duration_hours}h</p>
+                <p className="text-white/65 text-xs">{step.description}</p>
+                <p className="text-white/30 text-[10px]">{step.duration_hours}h</p>
               </div>
             </div>
           ))}
@@ -683,8 +732,8 @@ function ExecutionPlan({ plan, separateReport }) {
         >
           {plan.logistics?.selected_details && (
             <div className="mb-3">
-              <p className="text-white/20 text-[10px] tracking-wider uppercase mb-1.5">Selected Provider</p>
-              <p className="text-white/50 text-xs">
+              <p className="text-white/35 text-[10px] tracking-wider uppercase mb-1.5">Selected Provider</p>
+              <p className="text-white/60 text-xs">
                 <span className="text-violet-400/60 font-medium">{plan.logistics.selected_details.name}</span>
                 {plan.logistics.selected_details.hub && ` — Hub: ${plan.logistics.selected_details.hub}`}
                 {plan.logistics.selected_details.modes && ` · Modes: ${Array.isArray(plan.logistics.selected_details.modes) ? plan.logistics.selected_details.modes.join(", ") : plan.logistics.selected_details.modes}`}
@@ -693,19 +742,19 @@ function ExecutionPlan({ plan, separateReport }) {
             </div>
           )}
           {plan.logistics?.selection_rationale && (
-            <p className="text-white/25 text-[10px] italic mb-3">&quot;{plan.logistics.selection_rationale}&quot;</p>
+            <p className="text-white/40 text-[10px] italic mb-3">&quot;{plan.logistics.selection_rationale}&quot;</p>
           )}
           {plan.logistics?.route?.segments?.map((seg, i) => (
             <div key={i} className="flex items-center gap-2 py-1.5 text-xs">
               <span className="text-violet-400/40">→</span>
-              <span className="text-white/50">{seg.from} → {seg.to}</span>
-              <span className="text-white/15 ml-auto">{seg.duration_days}d · {seg.carrier || "—"}</span>
+              <span className="text-white/60">{seg.from} → {seg.to}</span>
+              <span className="text-white/30 ml-auto">{seg.duration_days}d · {seg.carrier || "—"}</span>
             </div>
           ))}
           <div className="pt-2 flex flex-wrap gap-4 text-[10px]">
-            <span className="text-white/20">Mode: <span className="text-white/40">{plan.logistics?.route?.mode || "—"}</span></span>
-            <span className="text-white/20">Risk: <span className="text-white/40">{plan.logistics?.route?.risk_level || "—"}</span></span>
-            <span className="text-white/20">Tracking: <span className="text-white/40">{plan.logistics?.route?.tracking_type || plan.logistics?.selected_details?.tracking || "—"}</span></span>
+            <span className="text-white/30">Mode: <span className="text-white/55">{plan.logistics?.route?.mode || "—"}</span></span>
+            <span className="text-white/30">Risk: <span className="text-white/55">{plan.logistics?.route?.risk_level || "—"}</span></span>
+            <span className="text-white/30">Tracking: <span className="text-white/55">{plan.logistics?.route?.tracking_type || plan.logistics?.selected_details?.tracking || "—"}</span></span>
           </div>
         </CollapsibleSection>
 
@@ -725,8 +774,8 @@ function ExecutionPlan({ plan, separateReport }) {
           </div>
           {plan.retailer?.customer_experience?.documentation_included && (
             <div className="mt-3">
-              <p className="text-white/20 text-[10px] mb-1">Documentation included:</p>
-              <p className="text-white/35 text-[10px]">
+              <p className="text-white/35 text-[10px] mb-1">Documentation included:</p>
+              <p className="text-white/50 text-[10px]">
                 {Array.isArray(plan.retailer.customer_experience.documentation_included)
                   ? plan.retailer.customer_experience.documentation_included.join(", ")
                   : plan.retailer.customer_experience.documentation_included}
@@ -754,9 +803,9 @@ function ExecutionPlan({ plan, separateReport }) {
             <div key={i} className="flex gap-3 py-2.5 border-b border-white/[0.03] last:border-0">
               <span className="text-cyan-400/40 text-xs font-mono w-5 flex-shrink-0 text-right">{path.step}.</span>
               <div className="flex-1">
-                <p className="text-white/60 text-xs font-medium">{path.action}</p>
-                <p className="text-white/35 text-[11px] mt-0.5">{path.result}</p>
-                {path.reasoning && <p className="text-white/20 text-[10px] italic mt-1">{path.reasoning}</p>}
+                <p className="text-white/75 text-xs font-medium">{path.action}</p>
+                <p className="text-white/50 text-[11px] mt-0.5">{path.result}</p>
+                {path.reasoning && <p className="text-white/35 text-[10px] italic mt-1">{path.reasoning}</p>}
               </div>
             </div>
           ))}
@@ -776,8 +825,8 @@ function ExecutionPlan({ plan, separateReport }) {
                   check.status === "passed" || check.status === "verified" ? "text-emerald-400/60" : "text-yellow-400/60"
                 }`} />
                 <div className="flex-1 min-w-0">
-                  <p className="text-white/60 text-xs font-medium">{check.check}</p>
-                  <p className="text-white/30 text-[11px] mt-0.5">{check.details}</p>
+                  <p className="text-white/75 text-xs font-medium">{check.check}</p>
+                  <p className="text-white/45 text-[11px] mt-0.5">{check.details}</p>
                 </div>
                 <span className={`text-[8px] tracking-wider px-1.5 py-0.5 flex-shrink-0 ${
                   check.status === "passed" || check.status === "verified"
@@ -810,8 +859,8 @@ function ExecutionPlan({ plan, separateReport }) {
                   {policy.status?.toUpperCase()}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-white/60 text-xs font-medium">{policy.policy}</p>
-                  <p className="text-white/30 text-[11px] mt-0.5">{policy.details}</p>
+                  <p className="text-white/75 text-xs font-medium">{policy.policy}</p>
+                  <p className="text-white/45 text-[11px] mt-0.5">{policy.details}</p>
                 </div>
               </div>
             ))
@@ -829,16 +878,16 @@ function ExecutionPlan({ plan, separateReport }) {
           <div className="space-y-0">
             {report.message_exchanges?.map((msg, i) => (
               <div key={i} className="flex items-start gap-2.5 py-2 border-b border-white/[0.02] last:border-0">
-                <span className="text-white/10 font-mono text-[10px] w-4 text-right flex-shrink-0 mt-0.5">{i + 1}</span>
+                <span className="text-white/20 font-mono text-[10px] w-4 text-right flex-shrink-0 mt-0.5">{i + 1}</span>
                 <span className="text-accent/40 mt-0.5 flex-shrink-0">→</span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 text-[11px] flex-wrap">
-                    <span className="text-white/60 font-medium">{msg.from}</span>
-                    <span className="text-white/15">→</span>
-                    <span className="text-white/60 font-medium">{msg.to}</span>
-                    {msg.protocol && <span className="text-white/10 text-[9px] ml-1">[{msg.protocol}]</span>}
+                    <span className="text-white/75 font-medium">{msg.from}</span>
+                    <span className="text-white/25">→</span>
+                    <span className="text-white/75 font-medium">{msg.to}</span>
+                    {msg.protocol && <span className="text-white/20 text-[9px] ml-1">[{msg.protocol}]</span>}
                   </div>
-                  <p className="text-white/30 text-[11px] mt-0.5 leading-relaxed">{msg.message}</p>
+                  <p className="text-white/45 text-[11px] mt-0.5 leading-relaxed">{msg.message}</p>
                 </div>
               </div>
             ))}
@@ -854,12 +903,12 @@ function ExecutionPlan({ plan, separateReport }) {
           {/* Order Sequence */}
           {report.execution_summary?.order_sequence && (
             <div className="mb-5">
-              <p className="text-white/25 text-[10px] tracking-wider uppercase mb-2">Execution Order</p>
+              <p className="text-white/40 text-[10px] tracking-wider uppercase mb-2">Execution Order</p>
               <div className="space-y-1.5">
                 {report.execution_summary.order_sequence.map((step, i) => (
                   <div key={i} className="flex items-start gap-2 text-xs">
-                    <span className="text-violet-400/30 font-mono flex-shrink-0 w-4 text-right">{i + 1}.</span>
-                    <span className="text-white/45">{step}</span>
+                    <span className="text-violet-400/40 font-mono flex-shrink-0 w-4 text-right">{i + 1}.</span>
+                    <span className="text-white/60">{step}</span>
                   </div>
                 ))}
               </div>
@@ -869,12 +918,12 @@ function ExecutionPlan({ plan, separateReport }) {
           {/* Timing */}
           {report.execution_summary?.timing && (
             <div className="mb-5">
-              <p className="text-white/25 text-[10px] tracking-wider uppercase mb-2">Timeline Breakdown</p>
+              <p className="text-white/40 text-[10px] tracking-wider uppercase mb-2">Timeline Breakdown</p>
               <div className="space-y-1.5">
                 {Object.entries(report.execution_summary.timing).map(([key, val]) => (
                   <div key={key} className="flex justify-between text-xs py-0.5">
-                    <span className="text-white/25 capitalize">{key.replace(/_/g, " ")}</span>
-                    <span className={`${key === "total" ? "text-white/70 font-medium" : "text-white/45"}`}>{val}</span>
+                    <span className="text-white/40 capitalize">{key.replace(/_/g, " ")}</span>
+                    <span className={`${key === "total" ? "text-white/80 font-medium" : "text-white/60"}`}>{val}</span>
                   </div>
                 ))}
               </div>
@@ -884,9 +933,9 @@ function ExecutionPlan({ plan, separateReport }) {
           {/* Routing */}
           {report.execution_summary?.routing && (
             <div className="mb-5">
-              <p className="text-white/25 text-[10px] tracking-wider uppercase mb-2">Supply Chain Route</p>
+              <p className="text-white/40 text-[10px] tracking-wider uppercase mb-2">Supply Chain Route</p>
               <div className="bg-white/[0.02] border border-white/[0.04] p-3">
-                <p className="text-white/45 text-xs leading-relaxed">{report.execution_summary.routing}</p>
+                <p className="text-white/60 text-xs leading-relaxed">{report.execution_summary.routing}</p>
               </div>
             </div>
           )}
@@ -894,12 +943,12 @@ function ExecutionPlan({ plan, separateReport }) {
           {/* Cost Breakdown */}
           {report.execution_summary?.cost_breakdown && (
             <div>
-              <p className="text-white/25 text-[10px] tracking-wider uppercase mb-2">Cost Breakdown</p>
+              <p className="text-white/40 text-[10px] tracking-wider uppercase mb-2">Cost Breakdown</p>
               <div className="space-y-1.5">
                 {Object.entries(report.execution_summary.cost_breakdown).map(([key, val]) => (
                   <div key={key} className="flex justify-between text-xs py-0.5">
-                    <span className="text-white/25 capitalize">{key.replace(/_/g, " ")}</span>
-                    <span className={`${key.includes("total") ? "text-accent font-medium" : "text-white/50"}`}>{val}</span>
+                    <span className="text-white/40 capitalize">{key.replace(/_/g, " ")}</span>
+                    <span className={`${key.includes("total") ? "text-accent font-medium" : "text-white/65"}`}>{val}</span>
                   </div>
                 ))}
               </div>
@@ -911,10 +960,10 @@ function ExecutionPlan({ plan, separateReport }) {
       {/* Selection criteria */}
       {report.selection_criteria && (
         <div className="mt-5 mb-2">
-          <p className="text-white/20 text-[10px] tracking-wider uppercase mb-2">Selection Criteria Applied</p>
+          <p className="text-white/35 text-[10px] tracking-wider uppercase mb-2">Selection Criteria Applied</p>
           <div className="flex flex-wrap gap-1.5">
             {report.selection_criteria.map((c, i) => (
-              <span key={i} className="text-[10px] text-white/25 border border-white/5 px-2.5 py-1">{c}</span>
+              <span key={i} className="text-[10px] text-white/40 border border-white/8 px-2.5 py-1">{c}</span>
             ))}
           </div>
         </div>
@@ -931,9 +980,9 @@ function ExecutionPlan({ plan, separateReport }) {
 function SectionLabel({ icon: Icon, label, extra, iconColor }) {
   return (
     <div className="flex items-center gap-2 mb-3">
-      <Icon className={`h-3.5 w-3.5 ${iconColor || "text-white/25"}`} />
-      <span className="text-white/25 text-[10px] tracking-[0.2em] uppercase">{label}</span>
-      {extra && <span className="text-white/10 text-[10px]">{extra}</span>}
+      <Icon className={`h-3.5 w-3.5 ${iconColor || "text-white/40"}`} />
+      <span className="text-white/40 text-[10px] tracking-[0.2em] uppercase">{label}</span>
+      {extra && <span className="text-white/25 text-[10px]">{extra}</span>}
     </div>
   );
 }
@@ -943,7 +992,7 @@ function StatCard({ icon: Icon, label, value, color }) {
     <div className="bg-dark-mid border border-white/5 p-3 sm:p-4">
       <div className="flex items-center gap-1.5 mb-1.5">
         <Icon className={`h-3 w-3 ${color}`} />
-        <span className="text-white/20 text-[9px] tracking-[0.15em] uppercase">{label}</span>
+        <span className="text-white/35 text-[9px] tracking-[0.15em] uppercase">{label}</span>
       </div>
       <p className={`text-base sm:text-lg font-semibold ${color}`}>{value}</p>
     </div>
@@ -956,10 +1005,10 @@ function CollapsibleSection({ open, onToggle, icon: Icon, iconColor, title, subt
       <button onClick={onToggle} className="flex items-center justify-between w-full px-4 py-3">
         <div className="flex items-center gap-2 min-w-0">
           <Icon className={`h-3.5 w-3.5 flex-shrink-0 ${iconColor}`} />
-          <span className="text-white/50 text-xs font-medium tracking-wider">{title}</span>
-          {subtitle && <span className="text-white/15 text-[10px] hidden sm:inline truncate">— {subtitle}</span>}
+          <span className="text-white/70 text-xs font-medium tracking-wider">{title}</span>
+          {subtitle && <span className="text-white/30 text-[10px] hidden sm:inline truncate">— {subtitle}</span>}
         </div>
-        {open ? <ChevronUp className="h-3.5 w-3.5 text-white/15 flex-shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 text-white/15 flex-shrink-0" />}
+        {open ? <ChevronUp className="h-3.5 w-3.5 text-white/25 flex-shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 text-white/25 flex-shrink-0" />}
       </button>
       {open && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="px-4 pb-4 border-t border-white/[0.03] pt-3">
@@ -973,8 +1022,8 @@ function CollapsibleSection({ open, onToggle, icon: Icon, iconColor, title, subt
 function InfoRow({ label, value }) {
   return (
     <div className="flex justify-between py-0.5">
-      <span className="text-white/20 text-xs">{label}</span>
-      <span className="text-white/45 text-xs text-right">{value || "—"}</span>
+      <span className="text-white/35 text-xs">{label}</span>
+      <span className="text-white/60 text-xs text-right">{value || "—"}</span>
     </div>
   );
 }
