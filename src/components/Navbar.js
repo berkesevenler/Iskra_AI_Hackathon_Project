@@ -30,6 +30,12 @@ export default function Navbar() {
   }, [isOpen]);
 
   useEffect(() => {
+    // On dashboard, navbar is always visible — no scroll hide
+    if (isDashboard) {
+      setVisible(true);
+      return;
+    }
+
     const handleScroll = () => {
       const currentY = window.scrollY;
       const goingUp = currentY < lastScrollY.current;
@@ -47,15 +53,17 @@ export default function Navbar() {
 
     window.addEventListener("scroll", handleScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleScroll);
-  }, []);
+  }, [isDashboard]);
 
-  // Fully transparent nav: dark text on light pages, white text on dark pages
-  const useDarkText = !isOnDarkPage;
+  // Dark background pages use white text, light background pages use dark text
+  const useDarkText = !isOnDarkPage && !isDashboard;
 
   return (
     <>
       <nav
-        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] bg-transparent ${
+        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+          isDashboard ? "bg-dark-mid border-b border-white/[0.06]" : "bg-transparent"
+        } ${
           visible
             ? "translate-y-0 opacity-100"
             : "-translate-y-full opacity-0"

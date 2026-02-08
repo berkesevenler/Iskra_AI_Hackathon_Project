@@ -547,35 +547,63 @@ function ExecutionPlan({ plan, separateReport }) {
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-5">
-        <StatCard icon={DollarSign} label="TOTAL COST" value={`$${Number(plan.cost_summary?.total_cost_usd || 0).toLocaleString()}`} color="text-accent" />
+        <StatCard icon={DollarSign} label="TOTAL COST" value={`$${Number(plan.cost_summary?.total_cost_usd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`} color="text-accent" />
         <StatCard icon={Clock} label="TIMELINE" value={`${plan.timeline?.total_days || "—"} days`} color="text-cyan-400" />
-        <StatCard icon={Package} label="COMPONENTS" value={plan.suppliers?.component_count || "—"} color="text-emerald-400" />
+        <StatCard icon={Package} label="COMPONENTS" value={plan.components?.length || plan.suppliers?.component_count || plan.suppliers?.quotes?.length || "—"} color="text-emerald-400" />
         <StatCard icon={Target} label="PARTNERS" value={`${(plan.suppliers?.selected?.length || 0) + 1 + 1 + 1}`} color="text-violet-400" />
       </div>
 
-      {/* Timeline bar */}
-      <div className="bg-dark-mid border border-white/5 p-4 mb-5">
-        <p className="text-white/20 text-[10px] tracking-[0.15em] uppercase mb-3">Project Timeline</p>
-        <div className="flex items-center gap-0.5 h-7">
-          {[
-            { label: "Procurement", days: plan.timeline?.parts_procurement_days, color: "bg-orange-400" },
-            { label: "Assembly", days: plan.timeline?.assembly_days, color: "bg-emerald-400" },
-            { label: "Shipping", days: plan.timeline?.shipping_days, color: "bg-violet-400" },
-            { label: "Delivery", days: plan.timeline?.delivery_days, color: "bg-amber-400" },
-          ].map((ph, i) => {
-            const total = plan.timeline?.total_days || 1;
-            const d = Number(ph.days) || 0;
-            const pct = Math.max((d / total) * 100, 10);
-            return (
-              <div key={i} className={`${ph.color}/30 h-full flex items-center justify-center`} style={{ width: `${pct}%` }}>
-                <span className="text-[8px] text-white/50 tracking-wider font-medium whitespace-nowrap px-1">
-                  {ph.label} ({d}d)
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      {/* Timeline */}
+      {(() => {
+        const phases = [
+          { label: "Procurement", days: Number(plan.timeline?.parts_procurement_days) || 0, color: "bg-orange-400", textColor: "text-orange-400", border: "border-orange-400/30", icon: "📦" },
+          { label: "Assembly", days: Number(plan.timeline?.assembly_days) || 0, color: "bg-emerald-400", textColor: "text-emerald-400", border: "border-emerald-400/30", icon: "🔧" },
+          { label: "Shipping", days: Number(plan.timeline?.shipping_days) || 0, color: "bg-violet-400", textColor: "text-violet-400", border: "border-violet-400/30", icon: "🚚" },
+          { label: "Delivery", days: Number(plan.timeline?.delivery_days) || 0, color: "bg-amber-400", textColor: "text-amber-400", border: "border-amber-400/30", icon: "📍" },
+        ];
+        const totalDays = plan.timeline?.total_days || phases.reduce((s, p) => s + p.days, 0) || 1;
+        let cumulativeDays = 0;
+
+        return (
+          <div className="bg-dark-mid border border-white/5 p-5 mb-5">
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-white/25 text-[10px] tracking-[0.15em] uppercase">Project Timeline</p>
+              <p className="text-white/40 text-xs font-medium">{totalDays} days total</p>
+            </div>
+
+            {/* Timeline bar */}
+            <div className="flex items-stretch gap-[2px] h-8 mb-4 rounded-sm overflow-hidden">
+              {phases.map((ph, i) => {
+                const pct = Math.max((ph.days / totalDays) * 100, 6);
+                return (
+                  <div key={i} className={`${ph.color}/20 h-full relative`} style={{ width: `${pct}%` }}>
+                    <div className={`absolute inset-y-0 left-0 ${ph.color}/50`} style={{ width: "3px" }} />
+                    <div className={`absolute inset-0 ${ph.color}/10`} />
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Phase details */}
+            <div className="grid grid-cols-4 gap-3">
+              {phases.map((ph, i) => {
+                const startDay = cumulativeDays;
+                cumulativeDays += ph.days;
+                return (
+                  <div key={i} className={`border-l-2 ${ph.border} pl-3 py-1`}>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <div className={`w-1.5 h-1.5 rounded-full ${ph.color}`} />
+                      <span className="text-white/50 text-[10px] font-medium tracking-wide">{ph.label}</span>
+                    </div>
+                    <p className={`${ph.textColor} text-sm font-semibold`}>{ph.days} days</p>
+                    <p className="text-white/20 text-[10px]">Day {startDay + 1} → {cumulativeDays}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ═══ Detail sections ═══ */}
       <div className="space-y-2 mb-5">
@@ -583,7 +611,7 @@ function ExecutionPlan({ plan, separateReport }) {
         <CollapsibleSection
           open={openSections.suppliers} onToggle={() => toggle("suppliers")}
           icon={Package} iconColor="text-cyan-400" title="Supplier Quotes"
-          subtitle={`${plan.suppliers?.component_count || 0} components · $${Number(plan.suppliers?.total_parts_cost_usd || 0).toLocaleString()}`}
+          subtitle={`${plan.components?.length || plan.suppliers?.component_count || plan.suppliers?.quotes?.length || 0} components · $${Number(plan.suppliers?.total_parts_cost_usd || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}
         >
           {plan.suppliers?.selected_details && (
             <div className="mb-4">
@@ -733,19 +761,6 @@ function ExecutionPlan({ plan, separateReport }) {
             </div>
           ))}
 
-          {/* Partner evaluation grid */}
-          <div className="mt-4 grid grid-cols-3 gap-3 pt-3 border-t border-white/[0.04]">
-            {[
-              { label: "Suppliers", total: report.total_partners_evaluated?.suppliers, selected: report.partners_shortlisted?.suppliers, color: "text-cyan-400" },
-              { label: "Manufacturers", total: report.total_partners_evaluated?.manufacturers, selected: report.partners_shortlisted?.manufacturers, color: "text-emerald-400" },
-              { label: "Logistics", total: report.total_partners_evaluated?.logistics_providers, selected: report.partners_shortlisted?.logistics_providers, color: "text-violet-400" },
-            ].map((p, i) => (
-              <div key={i} className="text-center">
-                <p className={`text-lg font-semibold ${p.color}`}>{p.selected}</p>
-                <p className="text-white/15 text-[10px]">of {p.total} {p.label.toLowerCase()}</p>
-              </div>
-            ))}
-          </div>
         </CollapsibleSection>
 
         {/* 2. Trust & Verification */}

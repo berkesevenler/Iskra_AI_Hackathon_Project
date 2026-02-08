@@ -7,32 +7,98 @@ based on real partner data from the database.
 import json
 import openai
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+MAX_RETRIES = 1
+RETRY_DELAY = 0.5  # seconds
 
-def _call_openai(system_prompt: str, user_prompt: str) -> dict:
-    """Helper: call OpenAI and parse JSON response."""
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.4,
-    )
-    return json.loads(response.choices[0].message.content)
+
+def _call_openai(system_prompt: str, user_prompt: str, max_tokens: int = 8000) -> dict:
+    """Helper: call OpenAI and parse JSON response with retry logic."""
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 2):  # 1 initial + MAX_RETRIES retries
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.4,
+                max_tokens=max_tokens,
+            )
+            result = json.loads(response.choices[0].message.content)
+            if attempt > 1:
+                print(f"[INFO] OpenAI call succeeded on attempt {attempt}")
+            return result
+        except Exception as e:
+            last_error = e
+            print(f"[WARN] OpenAI call attempt {attempt}/{MAX_RETRIES + 1} failed: {str(e)[:120]}")
+            if attempt <= MAX_RETRIES:
+                time.sleep(RETRY_DELAY * attempt)
+    raise last_error
 
 
 # ═══════════════════════════════════════════
-# SUPPLIER AGENT — Plain Python
+# SUPPLIER AGENT — Plain Python (Batched)
 # ═══════════════════════════════════════════
+
+SUPPLIER_BATCH_SIZE = 6  # Components per batch — keeps response < 8K tokens
+
+
+def _supplier_batch(project_id: str, batch: list, product_context: str, supplier_info: str) -> dict:
+    """Process a single batch of components through the supplier agent."""
+    system_prompt = f"""You are a Supplier Agent in a supply chain AI system.
+You have access to these REAL suppliers from your database:
+
+{supplier_info}
+
+For each component, assign it to the BEST matching supplier and generate a quote.
+
+COST RULES:
+- unit_cost_usd = realistic market price in USD (steel rod $15-50, circuit board $8-200, engine block $2000-8000, etc.)
+- Multiply base market price by the supplier's cost_multiplier
+- quantity = units the project needs
+- total_line_cost = unit_cost_usd × quantity
+- Prices MUST be realistic USD, NOT raw cost_multiplier values
+
+Return JSON:
+{{
+  "quotes": [
+    {{
+      "component_name": "...",
+      "assigned_supplier": "supplier name",
+      "supplier_location": "city, country",
+      "available": true,
+      "description": "Product description",
+      "specifications": "Specs",
+      "unit_cost_usd": 0.00,
+      "quantity": 0,
+      "total_line_cost": 0.00,
+      "lead_time_days": 0,
+      "constraints": [],
+      "supplier_notes": "Why this supplier"
+    }}
+  ]
+}}"""
+
+    user_prompt = f"""Project: {product_context}
+Components ({len(batch)} items):
+{json.dumps(batch, indent=2)}
+
+Generate one quote per component. Use realistic USD pricing."""
+
+    return _call_openai(system_prompt, user_prompt, max_tokens=6000)
+
 
 def supplier_check_availability(project_id: str, components: list, product_context: str, selected_suppliers: list) -> dict:
     """
-    Supplier Agent uses real supplier data to generate detailed quotes.
-    selected_suppliers: list of supplier dicts from the selector.
+    Supplier Agent — batches components into groups and runs them in parallel
+    so that each API call produces a small, completeable JSON response.
     """
     supplier_info = json.dumps([
         {
@@ -48,52 +114,53 @@ def supplier_check_availability(project_id: str, components: list, product_conte
         for s in selected_suppliers
     ], indent=2)
 
-    system_prompt = f"""You are a Supplier Agent in a supply chain AI system.
-You have access to these REAL suppliers from your database:
+    # Split components into batches
+    batches = [components[i:i + SUPPLIER_BATCH_SIZE] for i in range(0, len(components), SUPPLIER_BATCH_SIZE)]
+    print(f"[Supplier] Splitting {len(components)} components into {len(batches)} batches of ≤{SUPPLIER_BATCH_SIZE}")
 
-{supplier_info}
+    all_quotes = []
+    all_suppliers = set()
+    errors = []
 
-When given components, you must:
-1. Assign each component to the BEST matching supplier from the list above
-2. Generate detailed product descriptions and specifications
-3. Price based on the supplier's cost_multiplier (1.0 = baseline market price)
-4. Use the supplier's actual lead_time_days
-5. Note constraints and the specific supplier chosen for each component
+    # Run batches in parallel
+    with ThreadPoolExecutor(max_workers=min(len(batches), 4)) as pool:
+        futures = {
+            pool.submit(_supplier_batch, project_id, batch, product_context, supplier_info): idx
+            for idx, batch in enumerate(batches)
+        }
+        for future in as_completed(futures):
+            batch_idx = futures[future]
+            try:
+                result = future.result()
+                batch_quotes = result.get("quotes", [])
+                all_quotes.extend(batch_quotes)
+                for q in batch_quotes:
+                    s = q.get("assigned_supplier")
+                    if s:
+                        all_suppliers.add(s)
+                print(f"[Supplier] Batch {batch_idx + 1}/{len(batches)} OK — {len(batch_quotes)} quotes")
+            except Exception as e:
+                errors.append(str(e))
+                print(f"[Supplier] Batch {batch_idx + 1}/{len(batches)} FAILED: {str(e)[:100]}")
 
-Return JSON:
-{{
-  "agent_id": "supplier_alpha",
-  "project_id": "{project_id}",
-  "status": "quotes_generated",
-  "quotes": [
-    {{
-      "component_name": "...",
-      "assigned_supplier": "supplier name from database",
-      "supplier_location": "city, country",
-      "available": true,
-      "description": "Detailed product description",
-      "specifications": "Technical specifications",
-      "unit_cost_usd": 0.00,
-      "quantity_available": 0,
-      "lead_time_days": 0,
-      "constraints": ["..."],
-      "supplier_notes": "Why this supplier was chosen"
-    }}
-  ],
-  "suppliers_used": ["list of supplier names used"],
-  "total_estimated_cost": 0.00,
-  "reasoning": "Selection rationale"
-}}
+    total_cost = sum(
+        q.get("total_line_cost") or (q.get("unit_cost_usd", 0) * q.get("quantity", 1))
+        for q in all_quotes
+    )
+    suppliers_list = sorted(all_suppliers)
 
-Be VERY detailed and realistic. Use the actual supplier data."""
+    print(f"[Supplier] Done — {len(all_quotes)}/{len(components)} quotes, {len(suppliers_list)} suppliers, ${total_cost:,.2f} total")
 
-    user_prompt = f"""Project ID: {project_id}
-Product: {product_context}
-Required components: {json.dumps(components, indent=2)}
-
-Assign each component to the best supplier and generate quotes."""
-
-    return _call_openai(system_prompt, user_prompt)
+    return {
+        "agent_id": "supplier_alpha",
+        "project_id": project_id,
+        "status": "quotes_generated" if len(all_quotes) > 0 else "error",
+        "quotes": all_quotes,
+        "suppliers_used": suppliers_list,
+        "total_estimated_cost": total_cost,
+        "reasoning": f"Processed {len(components)} components in {len(batches)} parallel batches across {len(suppliers_list)} suppliers",
+        **({"errors": errors} if errors else {}),
+    }
 
 
 # ═══════════════════════════════════════════

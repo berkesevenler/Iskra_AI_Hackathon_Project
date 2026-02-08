@@ -159,13 +159,31 @@ async def run_project(request: Request):
             elif isinstance(c, str):
                 component_specs.append(c.lower())
 
+        # Dynamic partner count based on complexity
+        num_components = len(components)
+        supplier_count = min(max(num_components, 3), 8)   # 3-8 suppliers based on component diversity
+        manufacturer_count = min(max(num_components // 2, 2), 5)  # 2-5 manufacturers
+        logistics_count = min(max(num_components // 3, 2), 4)     # 2-4 logistics providers
+
+        # Build capability keywords from components for manufacturer matching
+        mfg_keywords = ["assembly", "production"]
+        for c in components:
+            if isinstance(c, dict):
+                cat = c.get("category", "").lower()
+                name = c.get("name", "").lower()
+                if cat: mfg_keywords.append(cat)
+                # Add relevant keywords
+                for kw in ["electronics", "mechanical", "automotive", "metal", "chemical", "textile", "precision", "machining", "injection", "welding"]:
+                    if kw in name or kw in cat:
+                        mfg_keywords.append(kw)
+
         # Smart selection from database
-        best_suppliers = select_suppliers(component_specs, DEFAULT_REF_X, DEFAULT_REF_Y, top_n=5)
+        best_suppliers = select_suppliers(component_specs, DEFAULT_REF_X, DEFAULT_REF_Y, top_n=supplier_count)
         best_manufacturers = select_manufacturers(
-            ["assembly", "vehicle", "automotive", "production"],
-            DEFAULT_REF_X, DEFAULT_REF_Y, top_n=5
+            mfg_keywords,
+            DEFAULT_REF_X, DEFAULT_REF_Y, top_n=manufacturer_count
         )
-        best_logistics = select_logistics(DEFAULT_REF_X, DEFAULT_REF_Y, DEFAULT_REF_X, DEFAULT_REF_Y, top_n=5)
+        best_logistics = select_logistics(DEFAULT_REF_X, DEFAULT_REF_Y, DEFAULT_REF_X, DEFAULT_REF_Y, top_n=logistics_count)
 
         supplier_summaries = [format_supplier_summary(s) for s in best_suppliers]
         manufacturer_summaries = [format_manufacturer_summary(m) for m in best_manufacturers]
@@ -203,13 +221,58 @@ async def run_project(request: Request):
                 supplier_check_availability, project_id, components, product_name, best_suppliers
             )
         except Exception as e:
+            print(f"[ERROR] Supplier agent call failed: {str(e)[:200]}")
             supplier_response = {"agent_id": "supplier_alpha", "status": "error", "error": str(e), "quotes": []}
 
         num_quotes = len(supplier_response.get("quotes", []))
         suppliers_used = supplier_response.get("suppliers_used", [])
+        print(f"[DEBUG] Supplier response: {num_quotes} quotes, {len(suppliers_used)} suppliers used, total_cost={supplier_response.get('total_estimated_cost', 'N/A')}")
+
+        # ── Fallback: if supplier returned 0 quotes, build synthetic quotes from procurement data ──
+        if num_quotes == 0 and len(components) > 0:
+            print(f"[WARN] Supplier agent returned 0 quotes for {len(components)} components. Building fallback quotes from procurement data...")
+            fallback_quotes = []
+            fallback_suppliers = set()
+            for idx, c in enumerate(components):
+                cname = c.get("name", f"Component {idx+1}") if isinstance(c, dict) else str(c)
+                cat = c.get("category", "general") if isinstance(c, dict) else "general"
+                est_cost = float(c.get("estimated_unit_cost_usd", 0)) if isinstance(c, dict) else 0
+                est_qty = int(c.get("estimated_quantity", 1)) if isinstance(c, dict) else 1
+                # Assign to a supplier from the pre-selected list (round-robin)
+                assigned = best_suppliers[idx % len(best_suppliers)] if best_suppliers else {}
+                sname = assigned.get("name", "Unassigned")
+                sloc = f"{assigned.get('city', '?')}, {assigned.get('country', '?')}"
+                lead = assigned.get("lead_time_days", 14)
+                fallback_suppliers.add(sname)
+                fallback_quotes.append({
+                    "component_name": cname,
+                    "assigned_supplier": sname,
+                    "supplier_location": sloc,
+                    "available": True,
+                    "description": c.get("specifications", f"{cname} — {cat}") if isinstance(c, dict) else cname,
+                    "specifications": cat,
+                    "unit_cost_usd": est_cost if est_cost > 0 else 50.0,
+                    "quantity": est_qty,
+                    "total_line_cost": (est_cost if est_cost > 0 else 50.0) * est_qty,
+                    "lead_time_days": lead,
+                    "constraints": [],
+                    "supplier_notes": "Fallback quote — supplier agent did not return data for this component",
+                })
+            supplier_response["quotes"] = fallback_quotes
+            supplier_response["suppliers_used"] = list(fallback_suppliers)
+            supplier_response["total_estimated_cost"] = sum(q["total_line_cost"] for q in fallback_quotes)
+            supplier_response["status"] = "fallback_quotes_generated"
+            num_quotes = len(fallback_quotes)
+            suppliers_used = supplier_response["suppliers_used"]
+            print(f"[INFO] Built {num_quotes} fallback quotes, total=${supplier_response['total_estimated_cost']:,.2f}")
+
+        cost_display = ""
+        if isinstance(supplier_response.get('total_estimated_cost'), (int, float)):
+            cost_display = f". Total: ${supplier_response['total_estimated_cost']:,.2f}"
+
         yield sse_event(log_entry(
             "supplier_alpha", "Supplier Agent", "quotes_generated",
-            f"Generated {num_quotes} component quotes across {len(suppliers_used)} suppliers. Total: ${supplier_response.get('total_estimated_cost', 'N/A'):,}" if isinstance(supplier_response.get('total_estimated_cost'), (int, float)) else f"Generated {num_quotes} quotes",
+            f"Generated {num_quotes} component quotes across {len(suppliers_used)} suppliers{cost_display}",
             data={"message_type": "A2A_RESPONSE", "response": supplier_response},
             phase="supplier_coordination",
         ))
@@ -247,6 +310,8 @@ async def run_project(request: Request):
             manufacturer_response = {"agent_id": "manufacturer_prime", "status": "error", "error": str(e)}
 
         selected_mfg = manufacturer_response.get("selected_manufacturer", "N/A")
+        # Also capture the manufacturer location from AI response
+        selected_mfg_location = manufacturer_response.get("manufacturer_location", "")
         yield sse_event(log_entry(
             "manufacturer_prime", "Manufacturer Agent", "assembly_plan_ready",
             f"Selected: {selected_mfg}. Assembly time: {manufacturer_response.get('assembly_plan', {}).get('total_assembly_time_days', 'N/A')} days",
@@ -339,14 +404,41 @@ async def run_project(request: Request):
             except (ValueError, TypeError):
                 return default
 
-        supplier_cost = safe_num(supplier_response.get("total_estimated_cost"))
+        # ── Compute costs with fallback logic ──
+        # Supplier cost: use AI total, but verify against individual quotes
+        ai_supplier_total = safe_num(supplier_response.get("total_estimated_cost"))
+        quotes = supplier_response.get("quotes", [])
+
+        # Calculate from individual quotes as fallback
+        computed_from_quotes = 0
+        for q in quotes:
+            line_cost = safe_num(q.get("total_line_cost", 0))
+            if line_cost > 0:
+                computed_from_quotes += line_cost
+            else:
+                unit = safe_num(q.get("unit_cost_usd", 0))
+                qty = safe_num(q.get("quantity", q.get("quantity_available", 1)))
+                if qty < 1:
+                    qty = 1
+                computed_from_quotes += unit * qty
+
+        # Use the larger value (AI might undercount, or quote-level might be more accurate)
+        # If AI total seems unrealistically low (< $50 for any real product), use quote sum
+        if ai_supplier_total < 50 and computed_from_quotes > 50:
+            supplier_cost = computed_from_quotes
+            print(f"[DEBUG] Supplier cost corrected: AI said ${ai_supplier_total:.2f}, computed ${computed_from_quotes:.2f}")
+        elif computed_from_quotes > ai_supplier_total * 1.5:
+            supplier_cost = computed_from_quotes  # Quotes are significantly higher
+        else:
+            supplier_cost = max(ai_supplier_total, computed_from_quotes)
+
         logistics_cost = safe_num(
             logistics_response.get("routes", [{}])[0].get("cost_usd") if logistics_response.get("routes") else 0
         )
         retail_price = safe_num(retailer_response.get("final_retail_price_usd"))
         assembly_days = int(safe_num(manufacturer_response.get("assembly_plan", {}).get("total_assembly_time_days")))
         supplier_lead = int(safe_num(max(
-            (safe_num(q.get("lead_time_days")) for q in supplier_response.get("quotes", [{}])),
+            (safe_num(q.get("lead_time_days")) for q in quotes) if quotes else [0],
             default=0
         )))
         logistics_days = int(safe_num(
@@ -355,6 +447,7 @@ async def run_project(request: Request):
         delivery_offset = int(safe_num(retailer_response.get("delivery_plan", {}).get("estimated_delivery_date_offset_days")))
         total_cost = supplier_cost + logistics_cost
         total_days = supplier_lead + assembly_days + logistics_days + delivery_offset
+        print(f"[DEBUG] Final costs: supplier=${supplier_cost:,.2f}, logistics=${logistics_cost:,.2f}, total=${total_cost:,.2f}, retail=${retail_price:,.2f}")
 
         # ── Build Coordination Report separately for reliability ──
         try:
@@ -536,28 +629,46 @@ async def run_project(request: Request):
                 "selection_criteria": [],
             }
 
+        # ── Match selected partners to their actual database details ──
+        def find_matching_summary(summaries, selected_name, fallback_index=0):
+            """Find the summary that matches the AI's selected partner by name."""
+            if not summaries:
+                return {}
+            selected_lower = (selected_name or "").lower().strip()
+            for s in summaries:
+                if selected_lower and selected_lower in s.get("name", "").lower():
+                    return s
+                if selected_lower and s.get("name", "").lower() in selected_lower:
+                    return s
+            return summaries[fallback_index] if summaries else {}
+
+        matched_mfg_summary = find_matching_summary(manufacturer_summaries, selected_mfg)
+        matched_log_summary = find_matching_summary(logistics_summaries, selected_log)
+
         execution_plan = {
             "project_id": project_id,
             "product": product_name,
             "intent": intent,
             "status": "completed",
+            "components": components,  # Always include full component list from procurement agent
             "suppliers": {
                 "selected": suppliers_used,
                 "selected_details": supplier_summaries,
-                "component_count": num_quotes,
+                "component_count": max(num_quotes, len(components)),
+                "quote_count": num_quotes,
                 "total_parts_cost_usd": supplier_cost,
                 "quotes": supplier_response.get("quotes", []),
             },
             "manufacturer": {
                 "selected": selected_mfg,
-                "selected_details": manufacturer_summaries[0] if manufacturer_summaries else {},
+                "selected_details": matched_mfg_summary,
                 "assembly_plan": manufacturer_response.get("assembly_plan", {}),
                 "can_assemble": manufacturer_response.get("can_assemble", False),
                 "selection_rationale": manufacturer_response.get("selection_rationale", ""),
             },
             "logistics": {
                 "selected": selected_log,
-                "selected_details": logistics_summaries[0] if logistics_summaries else {},
+                "selected_details": matched_log_summary,
                 "route": logistics_response.get("routes", [{}])[0] if logistics_response.get("routes") else {},
                 "recommended": logistics_response.get("recommended_route", ""),
                 "shipping_cost_usd": logistics_cost,
