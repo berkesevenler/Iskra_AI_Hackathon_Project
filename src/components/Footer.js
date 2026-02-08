@@ -15,11 +15,16 @@ export default function Footer() {
       <div className="w-full px-6 sm:px-10 lg:px-16 py-14">
         <div className="flex flex-col sm:flex-row justify-between items-start gap-10">
           {/* Logo */}
-          <Link href="/" className="flex items-center gap-2.5">
+          <Link href="/" className="flex items-center gap-3">
             <IskraLogo size={22} color="#1A1A1A" className="opacity-70" />
-            <span className="text-dark text-sm font-semibold tracking-wide">
-              ISKRA AI
-            </span>
+            <div className="flex flex-col">
+              <span className="text-dark text-sm font-bold tracking-wider leading-tight">
+                ONE CLICK AI
+              </span>
+              <span className="text-dark-soft/40 text-[8px] tracking-[0.12em] leading-tight">
+                BY ISKRA AI
+              </span>
+            </div>
           </Link>
 
           {/* Links */}

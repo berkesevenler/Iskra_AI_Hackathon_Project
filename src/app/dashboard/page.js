@@ -26,6 +26,10 @@ import {
   Target,
   BarChart3,
   Layers,
+  Search,
+  FileText,
+  Eye,
+  Activity,
 } from "lucide-react";
 
 // ═══════════════════════════════════════════
@@ -71,9 +75,10 @@ function newProject(index) {
     id: `p_${Date.now()}_${index}`,
     name: `Project ${index}`,
     intent: "",
-    status: "idle",       // idle | running | completed | error
+    status: "idle",
     logs: [],
     plan: null,
+    report: null,
     agentStatuses: {},
     error: null,
   };
@@ -86,10 +91,11 @@ function newProject(index) {
 export default function DashboardPage() {
   const [projects, setProjects] = useState([newProject(1)]);
   const [activeId, setActiveId] = useState(null);
+  const [activeTab, setActiveTab] = useState("dashboard");
   const logRef = useRef(null);
   const inputRef = useRef(null);
 
-  // Set initial active ID after mount (avoid SSR mismatch)
+  // Set initial active ID after mount
   useEffect(() => {
     if (!activeId && projects.length > 0) {
       setActiveId(projects[0].id);
@@ -107,7 +113,6 @@ export default function DashboardPage() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [active?.logs]);
 
-  // Agent status updater
   const updateAgentStatus = useCallback((projectId, agentId, event) => {
     setProjects(prev => prev.map(p => {
       if (p.id !== projectId) return p;
@@ -121,14 +126,12 @@ export default function DashboardPage() {
     }));
   }, []);
 
-  // Create new project
   const addProject = () => {
     const p = newProject(projects.length + 1);
     setProjects(prev => [...prev, p]);
     setActiveId(p.id);
   };
 
-  // Close project tab
   const closeProject = (id) => {
     const remaining = projects.filter(p => p.id !== id);
     if (remaining.length === 0) {
@@ -147,8 +150,6 @@ export default function DashboardPage() {
     const pid = active.id;
 
     updateProject(pid, { status: "running", logs: [], plan: null, agentStatuses: {}, error: null });
-
-    // Auto-rename the tab
     const shortName = active.intent.length > 30 ? active.intent.slice(0, 30) + "…" : active.intent;
     updateProject(pid, { name: shortName });
 
@@ -182,12 +183,22 @@ export default function DashboardPage() {
                   p.id === pid ? { ...p, logs: [...p.logs, data] } : p
                 ));
                 if (data.agent_id) updateAgentStatus(pid, data.agent_id, data.event || "");
+              } else if (data.type === "report") {
+                // Coordination report sent as separate event for reliability
+                console.log("[OneClickAI] Report received:", Object.keys(data.data || {}));
+                setProjects(prev => prev.map(p =>
+                  p.id === pid ? { ...p, report: data.data } : p
+                ));
               } else if (data.type === "plan") {
+                console.log("[OneClickAI] Plan received:", Object.keys(data.data || {}));
+                console.log("[OneClickAI] Plan has coordination_report:", !!data.data?.coordination_report);
                 updateProject(pid, { plan: data.data });
               } else if (data.type === "complete") {
                 updateProject(pid, { status: "completed" });
               }
-            } catch {}
+            } catch (parseErr) {
+              console.warn("[OneClickAI] SSE parse error:", parseErr.message, "line:", line.slice(0, 200));
+            }
           }
         }
       }
@@ -197,218 +208,311 @@ export default function DashboardPage() {
         : err.message;
       updateProject(pid, { status: "error", error: msg });
     } finally {
-      // If still running (e.g. stream ended without complete event), mark as completed
       setProjects(prev => prev.map(p =>
         p.id === pid && p.status === "running" ? { ...p, status: "completed" } : p
       ));
     }
   };
 
-  const hasResults = active && (active.logs.length > 0 || active.plan);
+  const hasResults = active && (active.logs.length > 0 || active.plan || active.report);
 
-  // Don't render until we have an active project (avoids hydration mismatch)
   if (!activeId) return null;
 
   return (
-    <div className="bg-dark min-h-screen flex flex-col">
-      {/* ── Top bar: project tabs ── */}
-      <div className="fixed top-20 left-0 right-0 z-30 bg-dark-mid/80 backdrop-blur-md border-b border-white/5">
-        <div className="max-w-7xl mx-auto px-4 sm:px-8 flex items-center gap-1 overflow-x-auto scrollbar-hide h-11">
+    <div className="bg-dark min-h-screen pt-20 flex">
+      {/* ── Sidebar: Projects (desktop) ── */}
+      <aside className="hidden lg:flex w-60 flex-shrink-0 flex-col sticky top-20 h-[calc(100vh-5rem)] bg-dark-mid/40 border-r border-white/[0.06]">
+        <div className="px-5 py-4 border-b border-white/[0.06]">
+          <p className="text-white/20 text-[10px] tracking-[0.2em] uppercase font-medium">Projects</p>
+        </div>
+        <div className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5 scrollbar-hide">
           {projects.map(proj => (
             <button
               key={proj.id}
               onClick={() => setActiveId(proj.id)}
-              className={`group flex items-center gap-2 px-4 py-2 text-xs tracking-wider whitespace-nowrap transition-all border-b-2 ${
+              className={`group w-full text-left px-3 py-2.5 text-xs tracking-wide transition-all ${
                 proj.id === activeId
-                  ? "border-accent text-white/90 bg-white/[0.03]"
-                  : "border-transparent text-white/30 hover:text-white/50"
+                  ? "bg-white/[0.06] text-white/90 border-l-2 border-accent"
+                  : "text-white/30 hover:text-white/50 hover:bg-white/[0.02] border-l-2 border-transparent"
               }`}
             >
-              {proj.status === "running" && <Loader2 className="h-3 w-3 animate-spin text-accent" />}
-              {proj.status === "completed" && <CheckCircle2 className="h-3 w-3 text-emerald-400" />}
-              {proj.status === "error" && <AlertCircle className="h-3 w-3 text-red-400" />}
-              <span className="max-w-[160px] truncate">{proj.name}</span>
-              {projects.length > 1 && (
-                <X
-                  className="h-3 w-3 text-white/10 group-hover:text-white/30 hover:text-white/60 transition-colors"
-                  onClick={(e) => { e.stopPropagation(); closeProject(proj.id); }}
-                />
-              )}
+              <div className="flex items-center gap-2">
+                {proj.status === "running" && <Loader2 className="h-3 w-3 animate-spin text-accent flex-shrink-0" />}
+                {proj.status === "completed" && <CheckCircle2 className="h-3 w-3 text-emerald-400 flex-shrink-0" />}
+                {proj.status === "error" && <AlertCircle className="h-3 w-3 text-red-400 flex-shrink-0" />}
+                {proj.status === "idle" && <div className="w-3 h-3 flex-shrink-0" />}
+                <span className="truncate flex-1">{proj.name}</span>
+                {projects.length > 1 && (
+                  <X
+                    className="h-3 w-3 text-white/0 group-hover:text-white/20 hover:!text-white/50 transition-all flex-shrink-0"
+                    onClick={(e) => { e.stopPropagation(); closeProject(proj.id); }}
+                  />
+                )}
+              </div>
             </button>
           ))}
+        </div>
+        <div className="px-3 py-3 border-t border-white/[0.06]">
           <button
             onClick={addProject}
-            className="flex items-center gap-1 px-3 py-2 text-white/15 hover:text-white/40 transition-colors"
+            className="flex items-center justify-center gap-2 w-full text-white/15 hover:text-white/40 text-[10px] tracking-[0.15em] py-2 transition-colors hover:bg-white/[0.02]"
           >
-            <Plus className="h-3.5 w-3.5" />
-            <span className="text-[10px] tracking-wider">NEW</span>
+            <Plus className="h-3 w-3" /> NEW PROJECT
           </button>
         </div>
-      </div>
+      </aside>
 
-      {/* ── Main content ── */}
-      <div className="flex-1 pt-[7.75rem] pb-8">
-        <div className="max-w-6xl mx-auto px-4 sm:px-8">
-
-          {/* Header */}
-          <div className="mb-8">
-            <h1 className="heading-display text-white text-2xl sm:text-3xl lg:text-4xl">
-              One Click AI
-            </h1>
-            <p className="text-white/30 mt-2 text-xs sm:text-sm tracking-wide">
-              Supply chain orchestration — 5 agents, 90 partners, one command
-            </p>
+      {/* ── Main Content ── */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Top bar: mobile project selector + sub-tabs */}
+        <div className="sticky top-20 z-20 bg-dark/90 backdrop-blur-md border-b border-white/[0.06]">
+          {/* Mobile project selector */}
+          <div className="lg:hidden flex items-center gap-1 px-4 py-2 border-b border-white/[0.04] overflow-x-auto scrollbar-hide">
+            {projects.map(proj => (
+              <button
+                key={proj.id}
+                onClick={() => setActiveId(proj.id)}
+                className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-[10px] tracking-wider transition-all border-b-2 ${
+                  proj.id === activeId
+                    ? "border-accent text-white/80"
+                    : "border-transparent text-white/25"
+                }`}
+              >
+                {proj.status === "running" && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+                {proj.status === "completed" && <CheckCircle2 className="h-2.5 w-2.5 text-emerald-400" />}
+                {proj.status === "error" && <AlertCircle className="h-2.5 w-2.5 text-red-400" />}
+                <span className="max-w-[120px] truncate">{proj.name}</span>
+              </button>
+            ))}
+            <button onClick={addProject} className="flex-shrink-0 px-2 py-1.5 text-white/15 hover:text-white/30">
+              <Plus className="h-3 w-3" />
+            </button>
           </div>
 
-          {/* Input */}
-          <div className="mb-6">
-            <div className="relative">
-              <textarea
-                ref={inputRef}
-                value={active.intent}
-                onChange={(e) => updateProject(active.id, { intent: e.target.value })}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleRun(); }}}
-                placeholder='Describe what you want to procure… e.g. "Buy all the parts required to assemble a Ferrari in one click"'
-                rows={2}
-                disabled={active.status === "running"}
-                className="w-full bg-dark-mid border border-white/10 text-white placeholder:text-white/15 px-5 py-4 text-sm focus:outline-none focus:border-accent/50 transition-colors resize-none font-sans"
-              />
-              <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                {hasResults && active.status !== "running" && (
-                  <button
-                    onClick={() => updateProject(active.id, { status: "idle", logs: [], plan: null, agentStatuses: {}, error: null, intent: "" })}
-                    className="flex items-center gap-1.5 text-white/20 hover:text-white/50 text-xs tracking-wider transition-colors"
-                  >
-                    <RotateCcw className="h-3 w-3" /> RESET
-                  </button>
-                )}
-                <button
-                  onClick={handleRun}
-                  disabled={!active.intent.trim() || active.status === "running"}
-                  className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:bg-white/5 disabled:text-white/15 text-white px-5 py-2 text-xs tracking-widest font-medium transition-all"
-                >
-                  {active.status === "running" ? (
-                    <><Loader2 className="h-3.5 w-3.5 animate-spin" /> RUNNING</>
-                  ) : (
-                    <>EXECUTE <ArrowRight className="h-3.5 w-3.5" /></>
-                  )}
-                </button>
-              </div>
-            </div>
+          {/* Sub-tabs: Agent Dashboard | Visualization */}
+          <div className="flex items-center px-4 sm:px-6 lg:px-8">
+            {[
+              { key: "dashboard", label: "Agent Dashboard", icon: Activity },
+              { key: "visualization", label: "Visualization", icon: Eye },
+            ].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`flex items-center gap-1.5 px-4 py-3 text-[11px] tracking-[0.12em] uppercase transition-all border-b-2 ${
+                  activeTab === tab.key
+                    ? "border-accent text-white/80"
+                    : "border-transparent text-white/25 hover:text-white/40"
+                }`}
+              >
+                <tab.icon className="h-3.5 w-3.5" />
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
 
-            {!hasResults && active.status === "idle" && (
-              <div className="flex flex-wrap gap-2 mt-3">
-                {EXAMPLES.map(ex => (
-                  <button key={ex} onClick={() => updateProject(active.id, { intent: ex })}
-                    className="text-white/20 hover:text-white/40 hover:border-white/15 text-[11px] border border-white/5 px-3 py-1.5 transition-all">
-                    {ex}
-                  </button>
-                ))}
+        {/* Tab content */}
+        <div className="flex-1">
+          {activeTab === "dashboard" ? (
+            <AgentDashboard
+              active={active}
+              updateProject={updateProject}
+              handleRun={handleRun}
+              hasResults={hasResults}
+              logRef={logRef}
+              inputRef={inputRef}
+              report={active.report}
+            />
+          ) : (
+            <VisualizationTab />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════
+// Agent Dashboard Tab
+// ═══════════════════════════════════════════
+
+function AgentDashboard({ active, updateProject, handleRun, hasResults, logRef, inputRef, report }) {
+  return (
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
+      {/* Input */}
+      <div className="mb-6">
+        <div className="relative">
+          <textarea
+            ref={inputRef}
+            value={active.intent}
+            onChange={(e) => updateProject(active.id, { intent: e.target.value })}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleRun(); }}}
+            placeholder='Describe what you want to procure… e.g. "Buy all the parts required to assemble a Ferrari in one click"'
+            rows={2}
+            disabled={active.status === "running"}
+            className="w-full bg-dark-mid border border-white/10 text-white placeholder:text-white/15 px-5 py-4 text-sm focus:outline-none focus:border-accent/50 transition-colors resize-none font-sans"
+          />
+          <div className="absolute bottom-3 right-3 flex items-center gap-2">
+            {hasResults && active.status !== "running" && (
+              <button
+                onClick={() => updateProject(active.id, { status: "idle", logs: [], plan: null, report: null, agentStatuses: {}, error: null, intent: "" })}
+                className="flex items-center gap-1.5 text-white/20 hover:text-white/50 text-xs tracking-wider transition-colors"
+              >
+                <RotateCcw className="h-3 w-3" /> RESET
+              </button>
+            )}
+            <button
+              onClick={handleRun}
+              disabled={!active.intent.trim() || active.status === "running"}
+              className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:bg-white/5 disabled:text-white/15 text-white px-5 py-2 text-xs tracking-widest font-medium transition-all"
+            >
+              {active.status === "running" ? (
+                <><Loader2 className="h-3.5 w-3.5 animate-spin" /> RUNNING</>
+              ) : (
+                <>EXECUTE <ArrowRight className="h-3.5 w-3.5" /></>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {!hasResults && active.status === "idle" && (
+          <div className="flex flex-wrap gap-2 mt-3">
+            {EXAMPLES.map(ex => (
+              <button key={ex} onClick={() => updateProject(active.id, { intent: ex })}
+                className="text-white/20 hover:text-white/40 hover:border-white/15 text-[11px] border border-white/5 px-3 py-1.5 transition-all">
+                {ex}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Error */}
+      {active.error && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+          className="mb-6 p-4 border border-red-500/30 bg-red-500/5 text-red-400 text-xs flex items-start gap-3">
+          <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium mb-1">Connection Error</p>
+            <p className="text-red-400/70">{active.error}</p>
+          </div>
+        </motion.div>
+      )}
+
+      {/* Agent cards */}
+      {(active.status === "running" || hasResults) && (
+        <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+          <SectionLabel icon={Layers} label="Agents" />
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            {AGENTS.map(agent => {
+              const st = active.agentStatuses[agent.id] || "idle";
+              const c = COLOR_MAP[agent.color];
+              const Icon = agent.icon;
+              return (
+                <div key={agent.id} className={`relative border p-3 transition-all duration-500 ${
+                  st === "active" ? `${c.border} ${c.bg} shadow-lg ${c.glow}` :
+                  st === "complete" ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01]"
+                }`}>
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <Icon className={`h-3.5 w-3.5 ${st === "idle" ? "text-white/15" : c.text}`} />
+                    <span className={`text-[10px] font-medium tracking-wider ${st === "idle" ? "text-white/25" : "text-white/70"}`}>
+                      {agent.name.toUpperCase()}
+                    </span>
+                  </div>
+                  <p className="text-white/15 text-[9px] tracking-wider">{agent.role}</p>
+                  <div className="flex items-center gap-1.5 mt-1.5">
+                    {st === "active" && (
+                      <span className="relative flex h-1.5 w-1.5">
+                        <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${c.dot}`} />
+                        <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${c.dot}`} />
+                      </span>
+                    )}
+                    {st === "complete" && <CheckCircle2 className="h-2.5 w-2.5 text-emerald-400/60" />}
+                    <span className={`text-[9px] tracking-wider ${
+                      st === "idle" ? "text-white/10" : st === "active" ? c.text : "text-emerald-400/50"
+                    }`}>
+                      {st === "idle" ? "STANDBY" : st === "active" ? "ACTIVE" : "DONE"}
+                    </span>
+                  </div>
+                  <span className="absolute top-1.5 right-2 text-[7px] text-white/8 tracking-wider">{agent.framework}</span>
+                </div>
+              );
+            })}
+          </div>
+        </motion.div>
+      )}
+
+      {/* Coordination Log */}
+      {(active.status === "running" || active.logs.length > 0) && (
+        <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="mb-6">
+          <SectionLabel icon={Terminal} label="Coordination Log" extra={`${active.logs.length} events`} />
+          <div ref={logRef} className="bg-[#0a0a0a] border border-white/5 p-3 max-h-[320px] overflow-y-auto font-mono text-[11px] leading-relaxed">
+            <AnimatePresence>
+              {active.logs.map((log, i) => (
+                <motion.div key={i} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.15 }}
+                  className="flex gap-2 py-1 border-b border-white/[0.02] last:border-0">
+                  <span className="text-white/12 w-14 flex-shrink-0 text-right">
+                    {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
+                  </span>
+                  <span className={`w-20 flex-shrink-0 font-medium truncate ${AGENT_TEXT_COLOR[log.agent_id] || "text-gray-400"}`}>
+                    {log.agent_name || log.agent_id}
+                  </span>
+                  <span className="text-white/50 flex-1">
+                    <span className="text-white/20 mr-1.5">{log.event?.replace(/_/g, " ")}</span>
+                    {log.details}
+                  </span>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+            {active.status === "running" && active.logs.length > 0 && (
+              <div className="flex items-center gap-2 pt-2 text-white/15">
+                <Loader2 className="h-3 w-3 animate-spin" /> Agents coordinating…
               </div>
             )}
           </div>
+        </motion.div>
+      )}
 
-          {/* Error */}
-          {active.error && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-              className="mb-6 p-4 border border-red-500/30 bg-red-500/5 text-red-400 text-xs flex items-start gap-3">
-              <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="font-medium mb-1">Connection Error</p>
-                <p className="text-red-400/70">{active.error}</p>
-              </div>
-            </motion.div>
-          )}
+      {/* Execution Plan */}
+      {active.plan && <ExecutionPlan plan={active.plan} separateReport={report} />}
 
-          {/* Agent cards */}
-          {(active.status === "running" || hasResults) && (
-            <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
-              <SectionLabel icon={Layers} label="Agents" />
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                {AGENTS.map(agent => {
-                  const st = active.agentStatuses[agent.id] || "idle";
-                  const c = COLOR_MAP[agent.color];
-                  const Icon = agent.icon;
-                  return (
-                    <div key={agent.id} className={`relative border p-3 transition-all duration-500 ${
-                      st === "active" ? `${c.border} ${c.bg} shadow-lg ${c.glow}` :
-                      st === "complete" ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01]"
-                    }`}>
-                      <div className="flex items-center gap-1.5 mb-1.5">
-                        <Icon className={`h-3.5 w-3.5 ${st === "idle" ? "text-white/15" : c.text}`} />
-                        <span className={`text-[10px] font-medium tracking-wider ${st === "idle" ? "text-white/25" : "text-white/70"}`}>
-                          {agent.name.toUpperCase()}
-                        </span>
-                      </div>
-                      <p className="text-white/15 text-[9px] tracking-wider">{agent.role}</p>
-                      <div className="flex items-center gap-1.5 mt-1.5">
-                        {st === "active" && (
-                          <span className="relative flex h-1.5 w-1.5">
-                            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${c.dot}`} />
-                            <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${c.dot}`} />
-                          </span>
-                        )}
-                        {st === "complete" && <CheckCircle2 className="h-2.5 w-2.5 text-emerald-400/60" />}
-                        <span className={`text-[9px] tracking-wider ${
-                          st === "idle" ? "text-white/10" : st === "active" ? c.text : "text-emerald-400/50"
-                        }`}>
-                          {st === "idle" ? "STANDBY" : st === "active" ? "ACTIVE" : "DONE"}
-                        </span>
-                      </div>
-                      <span className="absolute top-1.5 right-2 text-[7px] text-white/8 tracking-wider">{agent.framework}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </motion.div>
-          )}
+      {/* Empty state */}
+      {active.status === "idle" && !hasResults && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}
+          className="text-center py-20">
+          <div className="w-14 h-14 mx-auto mb-5 border border-white/8 flex items-center justify-center">
+            <Zap className="h-5 w-5 text-accent/40" />
+          </div>
+          <p className="text-white/15 text-sm tracking-wide mb-1">Enter a procurement request above</p>
+          <p className="text-white/8 text-xs tracking-wider">5 AI agents · 90 global partners · Real-time coordination</p>
+        </motion.div>
+      )}
+    </div>
+  );
+}
 
-          {/* Coordination Log */}
-          {(active.status === "running" || active.logs.length > 0) && (
-            <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="mb-6">
-              <SectionLabel icon={Terminal} label="Coordination Log" extra={`${active.logs.length} events`} />
-              <div ref={logRef} className="bg-[#0a0a0a] border border-white/5 p-3 max-h-[320px] overflow-y-auto font-mono text-[11px] leading-relaxed">
-                <AnimatePresence>
-                  {active.logs.map((log, i) => (
-                    <motion.div key={i} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.15 }}
-                      className="flex gap-2 py-1 border-b border-white/[0.02] last:border-0">
-                      <span className="text-white/12 w-14 flex-shrink-0 text-right">
-                        {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
-                      </span>
-                      <span className={`w-20 flex-shrink-0 font-medium truncate ${AGENT_TEXT_COLOR[log.agent_id] || "text-gray-400"}`}>
-                        {log.agent_name || log.agent_id}
-                      </span>
-                      <span className="text-white/50 flex-1">
-                        <span className="text-white/20 mr-1.5">{log.event?.replace(/_/g, " ")}</span>
-                        {log.details}
-                      </span>
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
-                {active.status === "running" && active.logs.length > 0 && (
-                  <div className="flex items-center gap-2 pt-2 text-white/15">
-                    <Loader2 className="h-3 w-3 animate-spin" /> Agents coordinating…
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          )}
 
-          {/* ═══ Execution Plan ═══ */}
-          {active.plan && <ExecutionPlan plan={active.plan} />}
+// ═══════════════════════════════════════════
+// Visualization Tab (Placeholder)
+// ═══════════════════════════════════════════
 
-          {/* Empty state */}
-          {active.status === "idle" && !hasResults && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}
-              className="text-center py-20">
-              <div className="w-14 h-14 mx-auto mb-5 border border-white/8 flex items-center justify-center">
-                <Zap className="h-5 w-5 text-accent/40" />
-              </div>
-              <p className="text-white/15 text-sm tracking-wide mb-1">Enter a procurement request above</p>
-              <p className="text-white/8 text-xs tracking-wider">5 AI agents · 90 global partners · Real-time coordination</p>
-            </motion.div>
-          )}
-        </div>
+function VisualizationTab() {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
+      <div className="w-16 h-16 mx-auto mb-6 border border-white/[0.06] flex items-center justify-center">
+        <Eye className="h-6 w-6 text-white/10" />
+      </div>
+      <h3 className="text-white/20 text-lg font-medium tracking-wide mb-2">
+        Visualization
+      </h3>
+      <p className="text-white/10 text-sm max-w-md leading-relaxed">
+        Agent network graphs, supply chain maps, and real-time coordination
+        visualizations will appear here.
+      </p>
+      <div className="flex items-center gap-2 mt-8 text-white/8 text-[10px] tracking-wider">
+        <div className="w-1.5 h-1.5 rounded-full bg-accent/30" />
+        COMING SOON
       </div>
     </div>
   );
@@ -419,9 +523,23 @@ export default function DashboardPage() {
 // Execution Plan — Human-Readable
 // ═══════════════════════════════════════════
 
-function ExecutionPlan({ plan }) {
-  const [openSections, setOpenSections] = useState({ suppliers: true, manufacturer: false, logistics: false, retailer: false, report: false });
+function ExecutionPlan({ plan, separateReport }) {
+  const [openSections, setOpenSections] = useState({
+    suppliers: true,
+    manufacturer: false,
+    logistics: false,
+    retailer: false,
+    discovery: true,
+    trust: true,
+    policy: false,
+    messages: true,
+    summary: true,
+  });
   const toggle = (key) => setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
+
+  // Use plan's coordination_report if available, otherwise fall back to separate report event
+  const report = plan.coordination_report || separateReport || {};
+  console.log("[OneClickAI] Rendering report — keys:", Object.keys(report), "discovery_paths:", report.discovery_paths?.length, "messages:", report.message_exchanges?.length);
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
@@ -435,7 +553,7 @@ function ExecutionPlan({ plan }) {
         <StatCard icon={Target} label="PARTNERS" value={`${(plan.suppliers?.selected?.length || 0) + 1 + 1 + 1}`} color="text-violet-400" />
       </div>
 
-      {/* Timeline */}
+      {/* Timeline bar */}
       <div className="bg-dark-mid border border-white/5 p-4 mb-5">
         <p className="text-white/20 text-[10px] tracking-[0.15em] uppercase mb-3">Project Timeline</p>
         <div className="flex items-center gap-0.5 h-7">
@@ -459,7 +577,7 @@ function ExecutionPlan({ plan }) {
         </div>
       </div>
 
-      {/* Collapsible detail sections */}
+      {/* ═══ Detail sections ═══ */}
       <div className="space-y-2 mb-5">
         {/* Suppliers */}
         <CollapsibleSection
@@ -509,9 +627,9 @@ function ExecutionPlan({ plan }) {
               <p className="text-white/20 text-[10px] tracking-wider uppercase mb-1.5">Selected Facility</p>
               <p className="text-white/50 text-xs">
                 <span className="text-emerald-400/60 font-medium">{plan.manufacturer.selected_details.name}</span>
-                {" — "}{plan.manufacturer.selected_details.location}
-                {" · "}{plan.manufacturer.selected_details.facility_size}
-                {" · "}{plan.manufacturer.selected_details.reliability} reliability
+                {plan.manufacturer.selected_details.location && ` — ${plan.manufacturer.selected_details.location}`}
+                {plan.manufacturer.selected_details.facility_size && ` · ${plan.manufacturer.selected_details.facility_size}`}
+                {plan.manufacturer.selected_details.reliability && ` · ${plan.manufacturer.selected_details.reliability} reliability`}
               </p>
             </div>
           )}
@@ -540,9 +658,9 @@ function ExecutionPlan({ plan }) {
               <p className="text-white/20 text-[10px] tracking-wider uppercase mb-1.5">Selected Provider</p>
               <p className="text-white/50 text-xs">
                 <span className="text-violet-400/60 font-medium">{plan.logistics.selected_details.name}</span>
-                {" — Hub: "}{plan.logistics.selected_details.hub}
-                {" · Modes: "}{plan.logistics.selected_details.modes?.join(", ")}
-                {" · "}{plan.logistics.selected_details.reliability} reliability
+                {plan.logistics.selected_details.hub && ` — Hub: ${plan.logistics.selected_details.hub}`}
+                {plan.logistics.selected_details.modes && ` · Modes: ${Array.isArray(plan.logistics.selected_details.modes) ? plan.logistics.selected_details.modes.join(", ") : plan.logistics.selected_details.modes}`}
+                {plan.logistics.selected_details.reliability && ` · ${plan.logistics.selected_details.reliability} reliability`}
               </p>
             </div>
           )}
@@ -580,73 +698,212 @@ function ExecutionPlan({ plan }) {
           {plan.retailer?.customer_experience?.documentation_included && (
             <div className="mt-3">
               <p className="text-white/20 text-[10px] mb-1">Documentation included:</p>
-              <p className="text-white/35 text-[10px]">{plan.retailer.customer_experience.documentation_included.join(", ")}</p>
+              <p className="text-white/35 text-[10px]">
+                {Array.isArray(plan.retailer.customer_experience.documentation_included)
+                  ? plan.retailer.customer_experience.documentation_included.join(", ")
+                  : plan.retailer.customer_experience.documentation_included}
+              </p>
             </div>
           )}
         </CollapsibleSection>
+      </div>
 
-        {/* Network Coordination Report */}
+      {/* ═══════════════════════════════════════ */}
+      {/* Network Coordination Report — 5 Sections */}
+      {/* ═══════════════════════════════════════ */}
+      <div className="mt-8 mb-4">
+        <SectionLabel icon={MessageSquare} label="Network Coordination Report" iconColor="text-accent" />
+      </div>
+
+      <div className="space-y-2 mb-6">
+        {/* 1. Discovery Paths */}
         <CollapsibleSection
-          open={openSections.report} onToggle={() => toggle("report")}
-          icon={MessageSquare} iconColor="text-accent" title="Network Coordination Report"
-          subtitle={`${plan.coordination_report?.agents_involved || 5} agents · ${plan.coordination_report?.total_partners_evaluated?.suppliers + plan.coordination_report?.total_partners_evaluated?.manufacturers + plan.coordination_report?.total_partners_evaluated?.logistics_providers || 90} partners evaluated`}
+          open={openSections.discovery} onToggle={() => toggle("discovery")}
+          icon={Search} iconColor="text-cyan-400" title="Discovery Paths"
+          subtitle={`${(report.total_partners_evaluated?.suppliers || 0) + (report.total_partners_evaluated?.manufacturers || 0) + (report.total_partners_evaluated?.logistics_providers || 0)} partners scanned`}
         >
-          {/* Communication flow */}
-          <div className="mb-5">
-            <p className="text-white/25 text-[10px] tracking-wider uppercase mb-2">Agent Communication Flow</p>
-            <div className="space-y-0.5">
-              {plan.coordination_report?.communication_flow?.map((msg, i) => (
-                <div key={i} className="flex items-start gap-2 py-1 text-[11px]">
-                  <span className="text-accent/30 mt-0.5 flex-shrink-0">→</span>
-                  <span className="text-white/40">
-                    <span className="text-white/60 font-medium">{msg.from}</span>
-                    {" → "}
-                    <span className="text-white/60 font-medium">{msg.to}</span>
-                  </span>
-                  <span className="text-white/25 flex-1">{msg.message}</span>
-                </div>
-              ))}
+          {report.discovery_paths?.map((path, i) => (
+            <div key={i} className="flex gap-3 py-2.5 border-b border-white/[0.03] last:border-0">
+              <span className="text-cyan-400/40 text-xs font-mono w-5 flex-shrink-0 text-right">{path.step}.</span>
+              <div className="flex-1">
+                <p className="text-white/60 text-xs font-medium">{path.action}</p>
+                <p className="text-white/35 text-[11px] mt-0.5">{path.result}</p>
+                {path.reasoning && <p className="text-white/20 text-[10px] italic mt-1">{path.reasoning}</p>}
+              </div>
             </div>
-          </div>
+          ))}
 
-          {/* Selection criteria */}
-          <div className="mb-5">
-            <p className="text-white/25 text-[10px] tracking-wider uppercase mb-2">Selection Criteria</p>
-            <div className="flex flex-wrap gap-2">
-              {plan.coordination_report?.selection_criteria?.map((c, i) => (
-                <span key={i} className="text-[10px] text-white/30 border border-white/5 px-2 py-1">{c}</span>
-              ))}
-            </div>
-          </div>
-
-          {/* Partner evaluation */}
-          <div className="mb-5">
-            <p className="text-white/25 text-[10px] tracking-wider uppercase mb-2">Partner Evaluation</p>
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                { label: "Suppliers", total: plan.coordination_report?.total_partners_evaluated?.suppliers, selected: plan.coordination_report?.partners_shortlisted?.suppliers, color: "text-cyan-400" },
-                { label: "Manufacturers", total: plan.coordination_report?.total_partners_evaluated?.manufacturers, selected: plan.coordination_report?.partners_shortlisted?.manufacturers, color: "text-emerald-400" },
-                { label: "Logistics", total: plan.coordination_report?.total_partners_evaluated?.logistics_providers, selected: plan.coordination_report?.partners_shortlisted?.logistics_providers, color: "text-violet-400" },
-              ].map((p, i) => (
-                <div key={i} className="text-center">
-                  <p className={`text-lg font-semibold ${p.color}`}>{p.selected}</p>
-                  <p className="text-white/15 text-[10px]">of {p.total} {p.label.toLowerCase()}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Trust & policy */}
-          <div className="mb-4">
-            <p className="text-white/25 text-[10px] tracking-wider uppercase mb-2">Trust & Verification</p>
-            <p className="text-white/35 text-xs leading-relaxed">{plan.coordination_report?.trust_verification}</p>
-          </div>
-          <div>
-            <p className="text-white/25 text-[10px] tracking-wider uppercase mb-2">Policy Enforcement</p>
-            <p className="text-white/35 text-xs leading-relaxed">{plan.coordination_report?.policy_enforcement}</p>
+          {/* Partner evaluation grid */}
+          <div className="mt-4 grid grid-cols-3 gap-3 pt-3 border-t border-white/[0.04]">
+            {[
+              { label: "Suppliers", total: report.total_partners_evaluated?.suppliers, selected: report.partners_shortlisted?.suppliers, color: "text-cyan-400" },
+              { label: "Manufacturers", total: report.total_partners_evaluated?.manufacturers, selected: report.partners_shortlisted?.manufacturers, color: "text-emerald-400" },
+              { label: "Logistics", total: report.total_partners_evaluated?.logistics_providers, selected: report.partners_shortlisted?.logistics_providers, color: "text-violet-400" },
+            ].map((p, i) => (
+              <div key={i} className="text-center">
+                <p className={`text-lg font-semibold ${p.color}`}>{p.selected}</p>
+                <p className="text-white/15 text-[10px]">of {p.total} {p.label.toLowerCase()}</p>
+              </div>
+            ))}
           </div>
         </CollapsibleSection>
+
+        {/* 2. Trust & Verification */}
+        <CollapsibleSection
+          open={openSections.trust} onToggle={() => toggle("trust")}
+          icon={Shield} iconColor="text-emerald-400" title="Trust & Verification"
+          subtitle={Array.isArray(report.trust_verification) ? `${report.trust_verification.length} checks passed` : ""}
+        >
+          {Array.isArray(report.trust_verification) ? (
+            report.trust_verification.map((check, i) => (
+              <div key={i} className="flex items-start gap-3 py-2.5 border-b border-white/[0.03] last:border-0">
+                <CheckCircle2 className={`h-3.5 w-3.5 mt-0.5 flex-shrink-0 ${
+                  check.status === "passed" || check.status === "verified" ? "text-emerald-400/60" : "text-yellow-400/60"
+                }`} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-white/60 text-xs font-medium">{check.check}</p>
+                  <p className="text-white/30 text-[11px] mt-0.5">{check.details}</p>
+                </div>
+                <span className={`text-[8px] tracking-wider px-1.5 py-0.5 flex-shrink-0 ${
+                  check.status === "passed" || check.status === "verified"
+                    ? "bg-emerald-400/10 text-emerald-400/70"
+                    : "bg-yellow-400/10 text-yellow-400/70"
+                }`}>
+                  {check.status?.toUpperCase()}
+                </span>
+              </div>
+            ))
+          ) : (
+            <p className="text-white/35 text-xs leading-relaxed">{report.trust_verification}</p>
+          )}
+        </CollapsibleSection>
+
+        {/* 3. Policy Enforcement */}
+        <CollapsibleSection
+          open={openSections.policy} onToggle={() => toggle("policy")}
+          icon={FileText} iconColor="text-amber-400" title="Policy Enforcement"
+          subtitle={Array.isArray(report.policy_enforcement) ? `${report.policy_enforcement.length} policies enforced` : ""}
+        >
+          {Array.isArray(report.policy_enforcement) ? (
+            report.policy_enforcement.map((policy, i) => (
+              <div key={i} className="flex items-start gap-3 py-2.5 border-b border-white/[0.03] last:border-0">
+                <span className={`text-[8px] tracking-wider px-1.5 py-0.5 flex-shrink-0 mt-0.5 ${
+                  policy.status === "compliant" || policy.status === "enforced" || policy.status === "optimized"
+                    ? "bg-emerald-400/10 text-emerald-400/70"
+                    : "bg-yellow-400/10 text-yellow-400/70"
+                }`}>
+                  {policy.status?.toUpperCase()}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-white/60 text-xs font-medium">{policy.policy}</p>
+                  <p className="text-white/30 text-[11px] mt-0.5">{policy.details}</p>
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="text-white/35 text-xs leading-relaxed">{report.policy_enforcement}</p>
+          )}
+        </CollapsibleSection>
+
+        {/* 4. Message Exchanges */}
+        <CollapsibleSection
+          open={openSections.messages} onToggle={() => toggle("messages")}
+          icon={MessageSquare} iconColor="text-accent" title="Agent Message Exchanges"
+          subtitle={`${report.message_exchanges?.length || 0} messages`}
+        >
+          <div className="space-y-0">
+            {report.message_exchanges?.map((msg, i) => (
+              <div key={i} className="flex items-start gap-2.5 py-2 border-b border-white/[0.02] last:border-0">
+                <span className="text-white/10 font-mono text-[10px] w-4 text-right flex-shrink-0 mt-0.5">{i + 1}</span>
+                <span className="text-accent/40 mt-0.5 flex-shrink-0">→</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 text-[11px] flex-wrap">
+                    <span className="text-white/60 font-medium">{msg.from}</span>
+                    <span className="text-white/15">→</span>
+                    <span className="text-white/60 font-medium">{msg.to}</span>
+                    {msg.protocol && <span className="text-white/10 text-[9px] ml-1">[{msg.protocol}]</span>}
+                  </div>
+                  <p className="text-white/30 text-[11px] mt-0.5 leading-relaxed">{msg.message}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </CollapsibleSection>
+
+        {/* 5. Execution Summary */}
+        <CollapsibleSection
+          open={openSections.summary} onToggle={() => toggle("summary")}
+          icon={Target} iconColor="text-violet-400" title="Execution Summary"
+          subtitle="Order · Timing · Routing · Cost"
+        >
+          {/* Order Sequence */}
+          {report.execution_summary?.order_sequence && (
+            <div className="mb-5">
+              <p className="text-white/25 text-[10px] tracking-wider uppercase mb-2">Execution Order</p>
+              <div className="space-y-1.5">
+                {report.execution_summary.order_sequence.map((step, i) => (
+                  <div key={i} className="flex items-start gap-2 text-xs">
+                    <span className="text-violet-400/30 font-mono flex-shrink-0 w-4 text-right">{i + 1}.</span>
+                    <span className="text-white/45">{step}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Timing */}
+          {report.execution_summary?.timing && (
+            <div className="mb-5">
+              <p className="text-white/25 text-[10px] tracking-wider uppercase mb-2">Timeline Breakdown</p>
+              <div className="space-y-1.5">
+                {Object.entries(report.execution_summary.timing).map(([key, val]) => (
+                  <div key={key} className="flex justify-between text-xs py-0.5">
+                    <span className="text-white/25 capitalize">{key.replace(/_/g, " ")}</span>
+                    <span className={`${key === "total" ? "text-white/70 font-medium" : "text-white/45"}`}>{val}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Routing */}
+          {report.execution_summary?.routing && (
+            <div className="mb-5">
+              <p className="text-white/25 text-[10px] tracking-wider uppercase mb-2">Supply Chain Route</p>
+              <div className="bg-white/[0.02] border border-white/[0.04] p-3">
+                <p className="text-white/45 text-xs leading-relaxed">{report.execution_summary.routing}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Cost Breakdown */}
+          {report.execution_summary?.cost_breakdown && (
+            <div>
+              <p className="text-white/25 text-[10px] tracking-wider uppercase mb-2">Cost Breakdown</p>
+              <div className="space-y-1.5">
+                {Object.entries(report.execution_summary.cost_breakdown).map(([key, val]) => (
+                  <div key={key} className="flex justify-between text-xs py-0.5">
+                    <span className="text-white/25 capitalize">{key.replace(/_/g, " ")}</span>
+                    <span className={`${key.includes("total") ? "text-accent font-medium" : "text-white/50"}`}>{val}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CollapsibleSection>
       </div>
+
+      {/* Selection criteria */}
+      {report.selection_criteria && (
+        <div className="mt-5 mb-2">
+          <p className="text-white/20 text-[10px] tracking-wider uppercase mb-2">Selection Criteria Applied</p>
+          <div className="flex flex-wrap gap-1.5">
+            {report.selection_criteria.map((c, i) => (
+              <span key={i} className="text-[10px] text-white/25 border border-white/5 px-2.5 py-1">{c}</span>
+            ))}
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -682,12 +939,12 @@ function CollapsibleSection({ open, onToggle, icon: Icon, iconColor, title, subt
   return (
     <div className={`bg-dark-mid border transition-colors ${open ? "border-white/8" : "border-white/[0.03]"}`}>
       <button onClick={onToggle} className="flex items-center justify-between w-full px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Icon className={`h-3.5 w-3.5 ${iconColor}`} />
+        <div className="flex items-center gap-2 min-w-0">
+          <Icon className={`h-3.5 w-3.5 flex-shrink-0 ${iconColor}`} />
           <span className="text-white/50 text-xs font-medium tracking-wider">{title}</span>
-          {subtitle && <span className="text-white/15 text-[10px] hidden sm:inline">— {subtitle}</span>}
+          {subtitle && <span className="text-white/15 text-[10px] hidden sm:inline truncate">— {subtitle}</span>}
         </div>
-        {open ? <ChevronUp className="h-3.5 w-3.5 text-white/15" /> : <ChevronDown className="h-3.5 w-3.5 text-white/15" />}
+        {open ? <ChevronUp className="h-3.5 w-3.5 text-white/15 flex-shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 text-white/15 flex-shrink-0" />}
       </button>
       {open && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="px-4 pb-4 border-t border-white/[0.03] pt-3">

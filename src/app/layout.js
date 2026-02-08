@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata = {
-  title: "Iskra AI",
-  description: "AI-powered innovation by Iskra AI",
+  title: "One Click AI — Supply Chain Orchestration",
+  description: "Autonomous AI agents coordinate your entire supply chain in one command — by Iskra AI",
 };
 
 export default function RootLayout({ children }) {

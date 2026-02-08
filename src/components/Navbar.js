@@ -64,19 +64,28 @@ export default function Navbar() {
         <div className="w-full px-6 sm:px-10 lg:px-16">
           <div className="flex justify-between items-center h-20">
             {/* Logo */}
-            <Link href="/" className="flex items-center gap-2.5 group">
+            <Link href="/" className="flex items-center gap-3 group">
               <IskraLogo
                 size={28}
                 color={useDarkText && !isOpen ? "#1A1A1A" : "white"}
                 className="transition-all duration-500"
               />
-              <span
-                className={`text-lg font-semibold tracking-wide transition-colors duration-500 ${
-                  useDarkText && !isOpen ? "text-dark" : "text-white"
-                }`}
-              >
-                ISKRA AI
-              </span>
+              <div className="flex flex-col">
+                <span
+                  className={`text-base font-bold tracking-wider leading-tight transition-colors duration-500 ${
+                    useDarkText && !isOpen ? "text-dark" : "text-white"
+                  }`}
+                >
+                  ONE CLICK AI
+                </span>
+                <span
+                  className={`text-[9px] tracking-[0.15em] leading-tight transition-colors duration-500 ${
+                    useDarkText && !isOpen ? "text-dark-soft/50" : "text-white/40"
+                  }`}
+                >
+                  BY ISKRA AI
+                </span>
+              </div>
             </Link>
 
             {/* Desktop — CTA (hidden on dashboard) */}
@@ -161,7 +170,7 @@ export default function Navbar() {
             </Link>
 
             <p className="text-white/20 text-xs tracking-wider mt-6 text-center">
-              &copy; {new Date().getFullYear()} Iskra AI
+              &copy; {new Date().getFullYear()} One Click AI · Iskra AI
             </p>
           </div>
         </div>
