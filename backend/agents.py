@@ -303,41 +303,62 @@ Choose the best logistics provider and plan the optimal route."""
 # RETAILER AGENT — Plain Python
 # ═══════════════════════════════════════════
 
-def retailer_plan_delivery(project_id: str, product_context: str, manufacturing_data: dict, logistics_data: dict) -> dict:
+def retailer_plan_delivery(project_id: str, product_context: str, manufacturing_data: dict, logistics_data: dict, cost_data: dict = None) -> dict:
     """
     Retailer Agent handles final delivery, customer communication, and post-sale.
+    cost_data should include: parts_cost_usd, shipping_cost_usd, total_procurement_cost_usd
     """
-    system_prompt = """You are a Retailer Agent in a supply chain AI system.
+    # Build cost context so the agent knows the actual procurement costs
+    cost_context = ""
+    if cost_data:
+        parts = cost_data.get("parts_cost_usd", 0)
+        shipping = cost_data.get("shipping_cost_usd", 0)
+        total = cost_data.get("total_procurement_cost_usd", parts + shipping)
+        cost_context = f"""
+IMPORTANT — ACTUAL PROCUREMENT COSTS (you MUST use these numbers):
+- Parts & materials cost: ${parts:,.2f}
+- Shipping & logistics cost: ${shipping:,.2f}
+- Total procurement cost: ${total:,.2f}
+
+The final_retail_price_usd MUST be calculated as:
+  final_retail_price_usd = total_procurement_cost × (1 + margin_percentage / 100)
+A typical margin is 15-35% depending on product complexity.
+The retail price must ALWAYS be HIGHER than the total procurement cost of ${total:,.2f}.
+NEVER return a retail price lower than the total procurement cost."""
+
+    system_prompt = f"""You are a Retailer Agent in a supply chain AI system.
 You manage the final delivery to the customer and post-sale experience.
+{cost_context}
 
 Return JSON:
-{
+{{
   "agent_id": "retailer_direct",
-  "project_id": "<project_id>",
+  "project_id": "{project_id}",
   "status": "delivery_planned",
-  "delivery_plan": {
+  "delivery_plan": {{
     "packaging": "...",
     "delivery_method": "...",
     "estimated_delivery_date_offset_days": 0,
     "tracking_number": "...",
     "notifications": ["order confirmed", "shipped", "out for delivery", "delivered"]
-  },
-  "customer_experience": {
+  }},
+  "customer_experience": {{
     "warranty": "...",
     "return_policy": "...",
     "support_channel": "...",
     "documentation_included": ["..."]
-  },
+  }},
   "final_retail_price_usd": 0.00,
   "margin_percentage": 0,
-  "reasoning": "Delivery plan rationale"
-}"""
+  "reasoning": "Delivery plan rationale including how retail price was calculated from procurement costs"
+}}"""
 
     user_prompt = f"""Project ID: {project_id}
 Product: {product_context}
 Manufacturing: {json.dumps(manufacturing_data, indent=2) if manufacturing_data else 'Pending'}
 Logistics: {json.dumps(logistics_data, indent=2) if logistics_data else 'Pending'}
 
-Create a detailed retail delivery and customer experience plan."""
+Create a detailed retail delivery and customer experience plan.
+Remember: the retail price MUST be based on the actual procurement costs provided above."""
 
     return _call_openai(system_prompt, user_prompt)

@@ -69,12 +69,12 @@ export default function Navbar() {
             : "-translate-y-full opacity-0"
         }`}
       >
-        <div className="w-full px-6 sm:px-10 lg:px-16">
+        <div className="w-full px-4 sm:px-8 lg:px-12">
           <div className="flex justify-between items-center h-20">
             {/* Logo */}
-            <Link href="/" className="flex items-center gap-3 group">
+            <Link href="/" className="flex items-center gap-3.5 group">
               <IskraLogo
-                size={28}
+                size={34}
                 color={useDarkText && !isOpen ? "#1A1A1A" : "white"}
                 className="transition-all duration-500"
               />
@@ -103,7 +103,7 @@ export default function Navbar() {
                   href="/dashboard"
                   className="border border-accent text-accent hover:bg-accent hover:text-white px-6 py-2 text-sm tracking-widest font-medium transition-all duration-300"
                 >
-                  TRY ONE CLICK
+                  TRY ONE CLICK AI
                 </Link>
               </div>
             )}

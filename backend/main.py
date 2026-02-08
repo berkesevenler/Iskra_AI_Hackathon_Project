@@ -359,6 +359,43 @@ async def run_project(request: Request):
         ))
         await asyncio.sleep(0.3)
 
+        # ── Pre-compute costs BEFORE retailer call ──
+        def safe_num(v, default=0):
+            try:
+                return float(v) if v else default
+            except (ValueError, TypeError):
+                return default
+
+        # Supplier cost: use AI total, but verify against individual quotes
+        ai_supplier_total = safe_num(supplier_response.get("total_estimated_cost"))
+        quotes = supplier_response.get("quotes", [])
+
+        computed_from_quotes = 0
+        for q in quotes:
+            line_cost = safe_num(q.get("total_line_cost", 0))
+            if line_cost > 0:
+                computed_from_quotes += line_cost
+            else:
+                unit = safe_num(q.get("unit_cost_usd", 0))
+                qty = safe_num(q.get("quantity", q.get("quantity_available", 1)))
+                if qty < 1:
+                    qty = 1
+                computed_from_quotes += unit * qty
+
+        if ai_supplier_total < 50 and computed_from_quotes > 50:
+            supplier_cost = computed_from_quotes
+            print(f"[DEBUG] Supplier cost corrected: AI said ${ai_supplier_total:.2f}, computed ${computed_from_quotes:.2f}")
+        elif computed_from_quotes > ai_supplier_total * 1.5:
+            supplier_cost = computed_from_quotes
+        else:
+            supplier_cost = max(ai_supplier_total, computed_from_quotes)
+
+        logistics_cost = safe_num(
+            logistics_response.get("routes", [{}])[0].get("cost_usd") if logistics_response.get("routes") else 0
+        )
+        total_cost = supplier_cost + logistics_cost
+        print(f"[DEBUG] Pre-retailer costs: supplier=${supplier_cost:,.2f}, logistics=${logistics_cost:,.2f}, total=${total_cost:,.2f}")
+
         # ── Phase 7: Retailer Agent ──
         yield sse_event(log_entry(
             "procurement_main", "Procurement Agent", "contacting_retailer",
@@ -374,16 +411,35 @@ async def run_project(request: Request):
             phase="retailer_coordination",
         ))
 
+        # Pass actual procurement costs to retailer so it can price realistically
+        retailer_cost_data = {
+            "parts_cost_usd": supplier_cost,
+            "shipping_cost_usd": logistics_cost,
+            "total_procurement_cost_usd": total_cost,
+        }
+
         try:
             retailer_response = await asyncio.to_thread(
-                retailer_plan_delivery, project_id, product_name, manufacturer_response, logistics_response
+                retailer_plan_delivery, project_id, product_name, manufacturer_response, logistics_response, retailer_cost_data
             )
         except Exception as e:
             retailer_response = {"agent_id": "retailer_direct", "status": "error", "error": str(e)}
 
+        # ── Validate retail price: must be > total procurement cost ──
+        raw_retail = safe_num(retailer_response.get("final_retail_price_usd"))
+        if raw_retail < total_cost * 1.05:
+            # AI returned an unrealistic retail price — recompute with margin
+            margin_pct = safe_num(retailer_response.get("margin_percentage"), 25)
+            if margin_pct < 10:
+                margin_pct = 25
+            corrected_retail = round(total_cost * (1 + margin_pct / 100), 2)
+            print(f"[DEBUG] Retail price corrected: AI said ${raw_retail:,.2f}, total_cost=${total_cost:,.2f}, corrected to ${corrected_retail:,.2f} ({margin_pct}% margin)")
+            retailer_response["final_retail_price_usd"] = corrected_retail
+            retailer_response["margin_percentage"] = margin_pct
+
         yield sse_event(log_entry(
             "retailer_direct", "Retailer Agent", "delivery_planned",
-            f"Delivery plan ready. Offset: {retailer_response.get('delivery_plan', {}).get('estimated_delivery_date_offset_days', 'N/A')} days",
+            f"Delivery plan ready. Offset: {retailer_response.get('delivery_plan', {}).get('estimated_delivery_date_offset_days', 'N/A')} days. Retail: ${safe_num(retailer_response.get('final_retail_price_usd')):,.2f}",
             data={"message_type": "A2A_RESPONSE", "response": retailer_response},
             phase="retailer_coordination",
         ))
@@ -397,44 +453,7 @@ async def run_project(request: Request):
         ))
         await asyncio.sleep(0.5)
 
-        # Calculate totals safely
-        def safe_num(v, default=0):
-            try:
-                return float(v) if v else default
-            except (ValueError, TypeError):
-                return default
-
-        # ── Compute costs with fallback logic ──
-        # Supplier cost: use AI total, but verify against individual quotes
-        ai_supplier_total = safe_num(supplier_response.get("total_estimated_cost"))
-        quotes = supplier_response.get("quotes", [])
-
-        # Calculate from individual quotes as fallback
-        computed_from_quotes = 0
-        for q in quotes:
-            line_cost = safe_num(q.get("total_line_cost", 0))
-            if line_cost > 0:
-                computed_from_quotes += line_cost
-            else:
-                unit = safe_num(q.get("unit_cost_usd", 0))
-                qty = safe_num(q.get("quantity", q.get("quantity_available", 1)))
-                if qty < 1:
-                    qty = 1
-                computed_from_quotes += unit * qty
-
-        # Use the larger value (AI might undercount, or quote-level might be more accurate)
-        # If AI total seems unrealistically low (< $50 for any real product), use quote sum
-        if ai_supplier_total < 50 and computed_from_quotes > 50:
-            supplier_cost = computed_from_quotes
-            print(f"[DEBUG] Supplier cost corrected: AI said ${ai_supplier_total:.2f}, computed ${computed_from_quotes:.2f}")
-        elif computed_from_quotes > ai_supplier_total * 1.5:
-            supplier_cost = computed_from_quotes  # Quotes are significantly higher
-        else:
-            supplier_cost = max(ai_supplier_total, computed_from_quotes)
-
-        logistics_cost = safe_num(
-            logistics_response.get("routes", [{}])[0].get("cost_usd") if logistics_response.get("routes") else 0
-        )
+        # Finalize all computed values
         retail_price = safe_num(retailer_response.get("final_retail_price_usd"))
         assembly_days = int(safe_num(manufacturer_response.get("assembly_plan", {}).get("total_assembly_time_days")))
         supplier_lead = int(safe_num(max(
@@ -445,7 +464,6 @@ async def run_project(request: Request):
             logistics_response.get("routes", [{}])[0].get("total_duration_days") if logistics_response.get("routes") else 0
         ))
         delivery_offset = int(safe_num(retailer_response.get("delivery_plan", {}).get("estimated_delivery_date_offset_days")))
-        total_cost = supplier_cost + logistics_cost
         total_days = supplier_lead + assembly_days + logistics_days + delivery_offset
         print(f"[DEBUG] Final costs: supplier=${supplier_cost:,.2f}, logistics=${logistics_cost:,.2f}, total=${total_cost:,.2f}, retail=${retail_price:,.2f}")
 
@@ -601,6 +619,7 @@ async def run_project(request: Request):
                         "parts_and_materials": "$" + f"{supplier_cost:,.2f}",
                         "shipping_and_logistics": "$" + f"{logistics_cost:,.2f}",
                         "total_procurement_cost": "$" + f"{total_cost:,.2f}",
+                        "retail_margin": (f"{safe_num(retailer_response.get('margin_percentage'), 25):.0f}%") if retail_price else "TBD",
                         "estimated_retail_price": ("$" + f"{retail_price:,.2f}") if retail_price else "TBD by retailer",
                     },
                 },
