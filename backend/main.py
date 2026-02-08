@@ -14,6 +14,7 @@ from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -36,8 +37,20 @@ from selector import (
     format_logistics_summary,
 )
 
-app = FastAPI(title="One Click AI — Supply Chain Agents")
+app = FastAPI(
+    title="One Click AI — Supply Chain Agents",
+    redirect_slashes=False  # Don't redirect trailing slashes
+)
 
+# Logging middleware to debug requests
+class LoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        print(f"[REQUEST] {request.method} {request.url.path} from {request.client.host if request.client else 'unknown'}")
+        response = await call_next(request)
+        print(f"[RESPONSE] {request.method} {request.url.path} -> {response.status_code}")
+        return response
+
+app.add_middleware(LoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -64,6 +77,11 @@ def health():
 @app.get("/api/test")
 def test_api():
     return {"status": "ok", "message": "API is working"}
+
+
+@app.post("/api/test")
+def test_api_post():
+    return {"status": "ok", "message": "POST is working"}
 
 
 # ═══════════════════════════════════════════
@@ -108,17 +126,19 @@ def get_registry():
     return {"agents": list_agents()}
 
 
-@app.options("/api/run")
-async def options_run():
-    return {"status": "ok"}
-
-
 @app.post("/api/run")
 async def run_project(request: Request):
-    body = await request.json()
+    print(f"[DEBUG] POST /api/run called - Method: {request.method}, URL: {request.url}")
+    try:
+        body = await request.json()
+        print(f"[DEBUG] Body received: {list(body.keys())}")
+    except Exception as e:
+        print(f"[DEBUG] JSON error: {e}")
+        return {"error": f"Invalid JSON", "details": str(e)}, 400
+    
     intent = body.get("intent", "")
     if not intent:
-        return {"error": "Intent is required"}
+        return {"error": "Intent is required"}, 400
 
     project_id = f"proj_{uuid.uuid4().hex[:8]}"
 

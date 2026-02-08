@@ -164,12 +164,17 @@ export default function DashboardPage() {
     updateProject(pid, { name: shortName });
 
     try {
-      const res = await fetch(`${BACKEND_URL}/api/run`, {
+      const url = `${BACKEND_URL}/api/run`;
+      console.log(`[DEBUG] Making POST request to: ${url}`);
+      console.log(`[DEBUG] BACKEND_URL: ${BACKEND_URL}`);
+      
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ intent: active.intent.trim() }),
       });
 
+      console.log(`[DEBUG] Response status: ${res.status} ${res.statusText}`);
       if (!res.ok) throw new Error(`Backend returned ${res.status}`);
 
       const reader = res.body.getReader();
