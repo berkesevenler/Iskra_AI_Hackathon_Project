@@ -48,6 +48,15 @@ app.add_middleware(
 
 
 # ═══════════════════════════════════════════
+# Health check
+# ═══════════════════════════════════════════
+
+@app.get("/")
+def health_check():
+    return {"status": "ok", "service": "One Click AI — Supply Chain Agents"}
+
+
+# ═══════════════════════════════════════════
 # Utility
 # ═══════════════════════════════════════════
 
