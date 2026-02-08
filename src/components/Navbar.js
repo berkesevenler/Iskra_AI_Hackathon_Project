@@ -17,6 +17,7 @@ export default function Navbar() {
   const pathname = usePathname();
 
   const isOnDarkPage = darkPages.includes(pathname);
+  const isDashboard = pathname.startsWith("/dashboard");
 
   // Lock body scroll when mobile menu is open
   useEffect(() => {
@@ -78,15 +79,17 @@ export default function Navbar() {
               </span>
             </Link>
 
-            {/* Desktop — CTA only */}
-            <div className="hidden sm:flex items-center">
-              <Link
-                href="/dashboard"
-                className="border border-accent text-accent hover:bg-accent hover:text-white px-6 py-2 text-sm tracking-widest font-medium transition-all duration-300"
-              >
-                TRY ONE CLICK
-              </Link>
-            </div>
+            {/* Desktop — CTA (hidden on dashboard) */}
+            {!isDashboard && (
+              <div className="hidden sm:flex items-center">
+                <Link
+                  href="/dashboard"
+                  className="border border-accent text-accent hover:bg-accent hover:text-white px-6 py-2 text-sm tracking-widest font-medium transition-all duration-300"
+                >
+                  TRY ONE CLICK
+                </Link>
+              </div>
+            )}
 
             {/* Mobile Toggle */}
             <button
@@ -153,7 +156,7 @@ export default function Navbar() {
               onClick={() => setIsOpen(false)}
               className="flex items-center justify-between w-full border border-accent text-accent hover:bg-accent hover:text-white px-6 py-4 text-sm tracking-widest font-medium transition-all duration-300"
             >
-              TRY PRODUCT
+              TRY ONE CLICK
               <ArrowRight className="h-4 w-4" />
             </Link>
 

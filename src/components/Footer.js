@@ -1,7 +1,15 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import IskraLogo from "@/components/IskraLogo";
 
 export default function Footer() {
+  const pathname = usePathname();
+
+  // Hide footer on dashboard
+  if (pathname.startsWith("/dashboard")) return null;
+
   return (
     <footer className="bg-cream border-t border-cream-dark">
       <div className="w-full px-6 sm:px-10 lg:px-16 py-14">

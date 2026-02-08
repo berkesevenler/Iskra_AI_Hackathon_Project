@@ -1,6 +1,7 @@
 """
 Plain Python Agents — Supplier, Manufacturer, Logistics, Retailer.
-Each agent uses OpenAI to generate realistic, context-aware responses.
+Each agent uses OpenAI to generate realistic, context-aware responses
+based on real partner data from the database.
 """
 
 import json
@@ -28,51 +29,69 @@ def _call_openai(system_prompt: str, user_prompt: str) -> dict:
 # SUPPLIER AGENT — Plain Python
 # ═══════════════════════════════════════════
 
-def supplier_check_availability(project_id: str, components: list, product_context: str) -> dict:
+def supplier_check_availability(project_id: str, components: list, product_context: str, selected_suppliers: list) -> dict:
     """
-    Supplier Agent receives a list of components and returns detailed
-    availability quotes with pricing, lead times, and specifications.
+    Supplier Agent uses real supplier data to generate detailed quotes.
+    selected_suppliers: list of supplier dicts from the selector.
     """
-    system_prompt = """You are a Supplier Agent in a supply chain AI system.
-You have access to a vast inventory of parts, materials, and components.
+    supplier_info = json.dumps([
+        {
+            "name": s["name"],
+            "location": f"{s['city']}, {s['country']}",
+            "specialization": s["specialization"],
+            "lead_time_days": s["lead_time_days"],
+            "cost_multiplier": s["cost_multiplier"],
+            "reliability": f"{s['reliability']*100:.0f}%",
+            "certifications": s["certifications"],
+            "min_order_usd": s["min_order_usd"],
+        }
+        for s in selected_suppliers
+    ], indent=2)
 
-When given a list of required components for a product, you must:
-1. Check availability for each component
-2. Provide detailed product descriptions and specifications
-3. Generate realistic pricing (in USD)
-4. Estimate lead times in days
-5. Note any constraints or minimum order quantities
+    system_prompt = f"""You are a Supplier Agent in a supply chain AI system.
+You have access to these REAL suppliers from your database:
 
-Return a JSON object with this structure:
-{
+{supplier_info}
+
+When given components, you must:
+1. Assign each component to the BEST matching supplier from the list above
+2. Generate detailed product descriptions and specifications
+3. Price based on the supplier's cost_multiplier (1.0 = baseline market price)
+4. Use the supplier's actual lead_time_days
+5. Note constraints and the specific supplier chosen for each component
+
+Return JSON:
+{{
   "agent_id": "supplier_alpha",
-  "project_id": "<project_id>",
+  "project_id": "{project_id}",
   "status": "quotes_generated",
   "quotes": [
-    {
+    {{
       "component_name": "...",
-      "available": true/false,
-      "description": "Detailed product description with specs",
+      "assigned_supplier": "supplier name from database",
+      "supplier_location": "city, country",
+      "available": true,
+      "description": "Detailed product description",
       "specifications": "Technical specifications",
       "unit_cost_usd": 0.00,
       "quantity_available": 0,
       "lead_time_days": 0,
       "constraints": ["..."],
-      "supplier_notes": "..."
-    }
+      "supplier_notes": "Why this supplier was chosen"
+    }}
   ],
+  "suppliers_used": ["list of supplier names used"],
   "total_estimated_cost": 0.00,
-  "reasoning": "Why these quotes were generated"
-}
+  "reasoning": "Selection rationale"
+}}
 
-Be VERY detailed and realistic with descriptions and pricing."""
+Be VERY detailed and realistic. Use the actual supplier data."""
 
     user_prompt = f"""Project ID: {project_id}
-Product being assembled: {product_context}
+Product: {product_context}
 Required components: {json.dumps(components, indent=2)}
 
-Generate detailed availability quotes for ALL components listed above.
-Include realistic pricing, detailed descriptions, and technical specifications."""
+Assign each component to the best supplier and generate quotes."""
 
     return _call_openai(system_prompt, user_prompt)
 
@@ -81,48 +100,62 @@ Include realistic pricing, detailed descriptions, and technical specifications."
 # MANUFACTURER AGENT — Plain Python
 # ═══════════════════════════════════════════
 
-def manufacturer_check_capacity(project_id: str, components: list, supplier_data: dict, product_context: str) -> dict:
+def manufacturer_check_capacity(project_id: str, components: list, supplier_data: dict, product_context: str, selected_manufacturers: list) -> dict:
     """
-    Manufacturer Agent evaluates assembly capacity and creates a production plan.
+    Manufacturer Agent uses real manufacturer data to create assembly plans.
     """
-    system_prompt = """You are a Manufacturer Agent in a supply chain AI system.
-You operate a manufacturing facility capable of assembling complex products.
+    mfg_info = json.dumps([
+        {
+            "name": m["name"],
+            "location": f"{m['city']}, {m['country']}",
+            "specialization": m["specialization"],
+            "capabilities": m["capabilities"],
+            "lead_time_days": m["lead_time_days"],
+            "cost_per_hour": f"${m['cost_per_unit_hour']}",
+            "reliability": f"{m['reliability']*100:.0f}%",
+            "capacity_units_monthly": m["capacity_units_monthly"],
+            "facility_size_sqm": f"{m['facility_size_sqm']:,}",
+            "certifications": m["certifications"],
+        }
+        for m in selected_manufacturers
+    ], indent=2)
 
-When given component availability data from suppliers, you must:
-1. Evaluate if all dependencies are satisfied
-2. Check your capacity and queue
-3. Create an assembly plan with steps
-4. Estimate assembly time
-5. Identify any risks
+    system_prompt = f"""You are a Manufacturer Agent in a supply chain AI system.
+You have access to these REAL manufacturing facilities:
 
-Return a JSON object with this structure:
-{
+{mfg_info}
+
+Choose the BEST manufacturer from the list and create an assembly plan.
+
+Return JSON:
+{{
   "agent_id": "manufacturer_prime",
-  "project_id": "<project_id>",
+  "project_id": "{project_id}",
   "status": "assembly_plan_created",
-  "can_assemble": true/false,
-  "assembly_plan": {
+  "selected_manufacturer": "manufacturer name",
+  "manufacturer_location": "city, country",
+  "can_assemble": true,
+  "assembly_plan": {{
     "steps": [
-      {"step": 1, "description": "...", "duration_hours": 0, "dependencies": ["..."]}
+      {{"step": 1, "description": "...", "duration_hours": 0, "dependencies": ["..."]}}
     ],
     "total_assembly_time_days": 0,
-    "facility": "...",
+    "facility": "facility name and location",
     "quality_checks": ["..."]
-  },
-  "capacity_status": "available/limited/full",
+  }},
+  "capacity_status": "available",
   "estimated_completion_date_offset_days": 0,
+  "selection_rationale": "Why this manufacturer was chosen over others",
   "constraints": ["..."],
-  "reasoning": "Why this plan was created"
-}
-
-Be realistic and detailed about the assembly process."""
+  "reasoning": "Full reasoning"
+}}"""
 
     user_prompt = f"""Project ID: {project_id}
-Product to assemble: {product_context}
-Available components: {json.dumps(components, indent=2)}
-Supplier data summary: {json.dumps(supplier_data, indent=2) if supplier_data else 'Pending'}
+Product: {product_context}
+Components: {json.dumps(components, indent=2)}
+Supplier data: {json.dumps(supplier_data, indent=2) if supplier_data else 'Pending'}
 
-Create a detailed assembly/manufacturing plan."""
+Choose the best manufacturer and create a detailed assembly plan."""
 
     return _call_openai(system_prompt, user_prompt)
 
@@ -131,53 +164,70 @@ Create a detailed assembly/manufacturing plan."""
 # LOGISTICS AGENT — Plain Python
 # ═══════════════════════════════════════════
 
-def logistics_plan_route(project_id: str, pickup_details: dict, delivery_details: dict, product_context: str) -> dict:
+def logistics_plan_route(project_id: str, pickup_details: dict, delivery_details: dict, product_context: str, selected_logistics: list) -> dict:
     """
-    Logistics Agent plans shipping routes, estimates costs, and assesses risks.
+    Logistics Agent uses real logistics provider data to plan routes.
     """
-    system_prompt = """You are a Logistics Provider Agent in a supply chain AI system.
-You manage global shipping and transportation.
+    log_info = json.dumps([
+        {
+            "name": l["name"],
+            "hub": f"{l['city']}, {l['country']}",
+            "modes": l["modes"],
+            "coverage": l["coverage_regions"],
+            "cost_per_km": f"${l['cost_per_km_usd']}",
+            "base_fee": f"${l['base_fee_usd']}",
+            "avg_speed_kmh": l["avg_speed_kmh"],
+            "reliability": f"{l['reliability']*100:.0f}%",
+            "max_weight_tons": l["max_weight_tons"],
+            "customs_capable": l.get("customs_capable", False),
+            "hazmat_certified": l.get("hazmat_certified", False),
+            "tracking": l.get("tracking", "none"),
+        }
+        for l in selected_logistics
+    ], indent=2)
 
-When given pickup and delivery requirements, you must:
-1. Plan optimal shipping routes
-2. Calculate costs for different transport modes
-3. Estimate delivery times
-4. Assess risks (weather, customs, etc.)
-5. Recommend the best option
+    system_prompt = f"""You are a Logistics Provider Agent in a supply chain AI system.
+You have access to these REAL logistics providers:
 
-Return a JSON object with this structure:
-{
+{log_info}
+
+Choose the BEST provider(s) and plan optimal routes.
+
+Return JSON:
+{{
   "agent_id": "logistics_global",
-  "project_id": "<project_id>",
+  "project_id": "{project_id}",
   "status": "route_planned",
+  "selected_provider": "provider name",
+  "provider_hub": "city, country",
   "routes": [
-    {
+    {{
       "route_id": "...",
+      "provider": "provider name",
       "mode": "ground/air/sea",
       "segments": [
-        {"from": "...", "to": "...", "carrier": "...", "duration_days": 0}
+        {{"from": "...", "to": "...", "carrier": "...", "duration_days": 0}}
       ],
       "total_duration_days": 0,
       "cost_usd": 0.00,
       "risk_level": "low/medium/high",
       "risk_flags": ["..."],
-      "insurance_cost_usd": 0.00
-    }
+      "insurance_cost_usd": 0.00,
+      "tracking_type": "..."
+    }}
   ],
-  "recommended_route": "...",
+  "recommended_route": "route_id",
+  "selection_rationale": "Why this provider and route were chosen",
   "customs_requirements": ["..."],
-  "tracking_enabled": true,
-  "reasoning": "Why this route was recommended"
-}
-
-Be detailed and realistic with routes and pricing."""
+  "reasoning": "Full reasoning"
+}}"""
 
     user_prompt = f"""Project ID: {project_id}
 Product: {product_context}
-Pickup details: {json.dumps(pickup_details, indent=2)}
-Delivery requirements: {json.dumps(delivery_details, indent=2)}
+Pickup: {json.dumps(pickup_details, indent=2)}
+Delivery: {json.dumps(delivery_details, indent=2)}
 
-Plan the optimal shipping route and provide alternatives."""
+Choose the best logistics provider and plan the optimal route."""
 
     return _call_openai(system_prompt, user_prompt)
 
@@ -193,14 +243,7 @@ def retailer_plan_delivery(project_id: str, product_context: str, manufacturing_
     system_prompt = """You are a Retailer Agent in a supply chain AI system.
 You manage the final delivery to the customer and post-sale experience.
 
-When given manufacturing and logistics data, you must:
-1. Create a customer delivery plan
-2. Set up order tracking and notifications
-3. Plan packaging and presentation
-4. Outline warranty and support
-5. Generate a customer-facing timeline
-
-Return a JSON object with this structure:
+Return JSON:
 {
   "agent_id": "retailer_direct",
   "project_id": "<project_id>",
@@ -210,7 +253,7 @@ Return a JSON object with this structure:
     "delivery_method": "...",
     "estimated_delivery_date_offset_days": 0,
     "tracking_number": "...",
-    "notifications": ["..."]
+    "notifications": ["order confirmed", "shipped", "out for delivery", "delivered"]
   },
   "customer_experience": {
     "warranty": "...",
@@ -220,15 +263,13 @@ Return a JSON object with this structure:
   },
   "final_retail_price_usd": 0.00,
   "margin_percentage": 0,
-  "reasoning": "Why this delivery plan was created"
-}
-
-Be detailed about the customer experience."""
+  "reasoning": "Delivery plan rationale"
+}"""
 
     user_prompt = f"""Project ID: {project_id}
 Product: {product_context}
-Manufacturing data: {json.dumps(manufacturing_data, indent=2) if manufacturing_data else 'Pending'}
-Logistics data: {json.dumps(logistics_data, indent=2) if logistics_data else 'Pending'}
+Manufacturing: {json.dumps(manufacturing_data, indent=2) if manufacturing_data else 'Pending'}
+Logistics: {json.dumps(logistics_data, indent=2) if logistics_data else 'Pending'}
 
 Create a detailed retail delivery and customer experience plan."""
 
