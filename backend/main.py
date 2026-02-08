@@ -56,6 +56,11 @@ def health_check():
     return {"status": "ok", "service": "One Click AI — Supply Chain Agents"}
 
 
+@app.get("/health")
+def health():
+    return {"status": "healthy", "port": os.getenv("PORT", "unknown")}
+
+
 # ═══════════════════════════════════════════
 # Utility
 # ═══════════════════════════════════════════
