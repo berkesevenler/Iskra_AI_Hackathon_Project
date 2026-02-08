@@ -72,9 +72,12 @@ const EXAMPLES = [
   "Build a complete smart home system for a 200-unit residential project, optimize for total cost",
 ];
 
+// TODO: Replace with your Railway URL (e.g., "https://your-app.up.railway.app")
+const RAILWAY_URL = "https://iskraaihackathonproject-production.up.railway.app"; // ← PUT YOUR RAILWAY URL HERE
+
 const BACKEND_URL = typeof window !== "undefined"
-  ? (process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000")
-  : "http://localhost:8000";
+  ? (process.env.NEXT_PUBLIC_BACKEND_URL || RAILWAY_URL)
+  : RAILWAY_URL;
 
 // ═══════════════════════════════════════════
 // Helpers
