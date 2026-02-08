@@ -61,6 +61,11 @@ def health():
     return {"status": "healthy", "port": os.getenv("PORT", "unknown")}
 
 
+@app.get("/api/test")
+def test_api():
+    return {"status": "ok", "message": "API is working"}
+
+
 # ═══════════════════════════════════════════
 # Utility
 # ═══════════════════════════════════════════
@@ -101,6 +106,11 @@ def health():
 @app.get("/api/registry")
 def get_registry():
     return {"agents": list_agents()}
+
+
+@app.options("/api/run")
+async def options_run():
+    return {"status": "ok"}
 
 
 @app.post("/api/run")
